@@ -2,7 +2,8 @@
 param(
     [Parameter(Mandatory=$true)][string]$Root,
     [Parameter(Mandatory=$true)][string]$OutDir,
-    [int]$Top = 50
+    [int]$Top = 50,
+    [long]$MinDupBytes = 50MB
 )
 
 # Карта папок (топ-N) + топ файлов + кандидаты дублей.
@@ -37,7 +38,7 @@ Get-ChildItem -LiteralPath $Root -Recurse -Force -File |
 
 # --- Дубликаты (группировка Name+Length, >50 МБ; хеш не делаем — только кандидаты) ---
 Get-ChildItem -LiteralPath $Root -Recurse -Force -File |
-    Where-Object { $_.Length -gt 50MB -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } |
+    Where-Object { $_.Length -gt $MinDupBytes -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } |
     Group-Object Length,Name |
     Where-Object { $_.Count -gt 1 } |
     ForEach-Object { $_.Group } |

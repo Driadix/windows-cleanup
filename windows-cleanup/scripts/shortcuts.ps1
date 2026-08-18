@@ -1,10 +1,11 @@
 # Параметры
 param(
     [Parameter(Mandatory=$true)][string]$OutDir,
+    [string[]]$Places,
     [switch]$Remove
 )
 
-# Поиск битых ярлыков в 4 стандартных местах (.lnk и .url).
+# Поиск битых ярлыков в 4 стандартных местах (.lnk и .url); с -Places сканирует указанные каталоги.
 # Использование: powershell.exe -NoProfile -ExecutionPolicy Bypass -File shortcuts.ps1 -OutDir "<рабочая папка>"
 # Без -Remove — только отчёт; с -Remove — удаляет битые (с логом). Живые никогда не трогаются.
 # Нюансы: .url — это INI ([InternetShortcut] URL=...); для веб-ссылки TargetPath пустой легитимно,
@@ -13,12 +14,14 @@ param(
 $ErrorActionPreference = 'SilentlyContinue'
 $sh = New-Object -ComObject WScript.Shell
 
-$places = @(
-    "$env:USERPROFILE\Desktop",
-    "$env:ProgramData\Microsoft\Windows\Desktop",
-    "$env:APPDATA\Microsoft\Windows\Start Menu\Programs",
-    "$env:ProgramData\Microsoft\Windows\Start Menu\Programs"
-)
+if (-not $Places -or $Places.Count -eq 0) {
+    $Places = @(
+        "$env:USERPROFILE\Desktop",
+        "$env:ProgramData\Microsoft\Windows\Desktop",
+        "$env:APPDATA\Microsoft\Windows\Start Menu\Programs",
+        "$env:ProgramData\Microsoft\Windows\Start Menu\Programs"
+    )
+}
 
 function Test-UrlBroken([string]$path) {
     $content = $null
