@@ -6,6 +6,10 @@
 #   * Ждёт завершения (-Wait) и печатает exit-код elevated-процесса.
 # Использование:
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File run-elevated.ps1 -Script "D:\...\elevated-cleanup.ps1" [-Args @('/dism')]
+# ВАЖНО про -Args: синтаксис @(...) — это PowerShell. Из git-bash/Hermes он НЕ работает
+# (bash воспринимает '@(' как свой синтаксис: 'syntax error near unexpected token (`').
+# Из bash передавай -Args словами раздельно:  -Args '-Work' 'D:\путь'  -Dism
+# или вовсе без -Args: делай параметры elevated-скрипта со значениями по умолчанию (U5).
 # Exit: 0 успех (см. exit-код elevated), 1 целевой скрипт не найден, 2 parse-ошибка.
 param(
     [Parameter(Mandatory=$true)][string]$Script,
