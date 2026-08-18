@@ -78,6 +78,7 @@ Get-ChildItem -LiteralPath $root -Recurse -Force -File -ErrorAction SilentlyCont
 ```
 
 - Файл всегда писать (при пустом результате — маркер `(пусто)`).
+- **Порог и лимиты настраиваются**: `scan.ps1` принимает `-MinDupBytes` (порог кандидатов в дубли, по умолчанию `50MB`), `-Top` (сколько топ-папок/файлов, по умолчанию 50) и `-SkipSystemDupes` (не дописывать системные дубли в `dupes.txt`). Меньший порог (например `-MinDupBytes 20MB`) даст больше кандидатов, больший — меньше шума.
 - **Системные пути** (WinSxS / `Windows\assembly` (NGEN) / DriverStore / lxss / Edge vs WebView2) — by-design «дубли», выносить в `dupes_system.txt`, не пугать пользователя.
 - Итог — **кандидаты**: подтверждение реальности только хешем (SHA-256) по парам из дублей.
 

@@ -23,7 +23,13 @@ foreach ($h in $hives.Keys) {
         $name = $p.DisplayName
         if (-not $name) { continue }   # шелуха без имени
         $dir = $null
-        if ($p.InstallLocation) { $dir = ([string]$p.InstallLocation).TrimEnd('\') }
+        if ($p.InstallLocation) {
+            $dir = ([string]$p.InstallLocation).TrimEnd('\')
+            # InstallLocation бывает URL/протокольной ссылкой (@url:http://..., http://..., ms-internal:...),
+            # а не локальным путём. Test-Path на URL всегда False, но это НЕ «пропавший софт» / сирота
+            # (LocKind='missing' сбил бы Фазу 6) — считаем «локации нет», как если бы поле пустое.
+            if ($dir -match '^@' -or $dir -match '^[a-zA-Z][a-zA-Z0-9+.-]*://' -or $dir -match '^ms-[a-zA-Z0-9.]+:') { $dir = '' }
+        }
         elseif ($p.UninstallString) {
             $m = [regex]::Match([string]$p.UninstallString, '^"([^"]+)"')
             if ($m.Success) { $dir = [IO.Path]::GetDirectoryName($m.Groups[1].Value) }

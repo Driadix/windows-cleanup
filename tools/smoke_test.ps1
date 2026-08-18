@@ -131,6 +131,14 @@ try {
     Assert ($exe4 -eq 'C:\Program Files\X\y.exe') 'common: Get-ExePath handles unquoted space path (with args)'
     $exe5 = Get-ExePath 'C:\Program Files\AmneziaVPN\AmneziaVPN-service.exe'
     Assert ($exe5 -eq 'C:\Program Files\AmneziaVPN\AmneziaVPN-service.exe') 'common: Get-ExePath handles unquoted space path (no args)'
+
+    # ---------- системный guard: BLOCKED + Test-ProtectedRoot ----------
+    $blocked1 = Remove-Target -Path "$env:SystemRoot\System32\definitely-missing-xzy.bin"
+    Assert ($blocked1.Status -eq 'BLOCKED') 'common: Remove-Target blocks System32 (BLOCKED, even if missing)'
+    $blocked2 = Remove-Target -Path "$env:SystemRoot\WinSxS\some-guid"
+    Assert ($blocked2.Status -eq 'BLOCKED') 'common: Remove-Target blocks WinSxS (BLOCKED)'
+    Assert (-not (Test-ProtectedRoot (Join-Path $tmp 'common'))) 'common: Test-ProtectedRoot allows normal temp paths'
+    Assert (-not (Test-ProtectedRoot "$env:SystemRoot\Temp")) 'common: Test-ProtectedRoot allows Windows\Temp'
 }
 finally {
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue

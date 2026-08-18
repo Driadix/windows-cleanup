@@ -1,7 +1,7 @@
 ---
 name: windows-cleanup
 description: "Semi-auto Windows PC cleanup: caches, junk, apps, space."
-version: 0.2.0
+version: 0.2.1
 author: Driadix
 license: MIT
 platforms: [windows]
@@ -100,7 +100,7 @@ metadata:
 
 ### Фаза 4. Мусор и кэши
 Точки мусора и команды — `references/cleanup.md`. **Мусор/кэши чистим только на выбранных в Фазе 1 дисках.** Сначала user-проход (temp, кэши пакетных менеджеров, браузерные Cache, корзины по выбранным дискам, установщики по списку). Кэши на других томах (например `%TEMP%` на D: при выборе C:) `inventory-quick.ps1 -Disks` помечает «вне выбранных дисков» — по умолчанию пропускаем или спрашиваем явным образом (U2). Затем собери всё elevated в **один проход** (Windows\Temp, SoftwareDistribution, DeliveryOptimization, системные остатки, DISM `/StartComponentCleanup`) — шаблон `scripts/elevated-cleanup.ps1`, запуск только через **`scripts/run-elevated.ps1`** (он делает parse-check ДО окна UAC). Перед промптом: «сейчас появится окно UAC — подтверди» → прочитай лог скрипта (не консоль). Удаление — **группами**, одним батчем, не растаскивай на одиночные UAC-спамы.
-**Критерий:** по каждой цели `Test-Path` → `removed` / `already gone` / `LOCKED`; дельта зафиксирована и записана в ledger.csv; невыполненное (LOCKED) помечено и попадает в итог.
+**Критерий:** по каждой цели `Test-Path` → `removed` / `already gone` / `LOCKED` / `BLOCKED` (системный корень); дельта зафиксирована и записана в ledger.csv; невыполненное (LOCKED) помечено и попадает в итог.
 
 ### Фаза 5. Программы
 Удаление строго по списку:
@@ -148,7 +148,9 @@ Desktop user+Public, Start Menu user+ProgramData; `.lnk` и `.url`. Скрипт
 - **`-LiteralPath` всегда** — кириллица, пробелы, скобки. **`-Include`/`-Exclude` не работают с `-LiteralPath`** (молча пропускают фильтр) — фильтруй по `Extension` явно через `Where-Object`.
 - **Ярлыки**: `.url` — это INI-содержимое (`URL=`), пустая точно-цель COM — не всегда битая (shell-объекты «Этот компьютер», `shell:`/`::{}`-таргеты) — битый = конкретный несуществующий путь к файлу. Поведение зашито в `scripts/shortcuts.ps1`.
 - **Автозапуски**: голые имена exe (`powershell.exe`) резолвятся через %PATH% и НЕ битые; PathName служб может содержать двойные `\\`; пути с пробелами без аргументов — учитывать целиком. Парсер в `cleanup-common.ps1`/`autostart.ps1`.
-- **После каждого удаления — `Test-Path`**: `removed / LOCKED / already gone`. `SilentlyContinue` прячет провалы — не полагайся на него.
+- **После каждого удаления — `Test-Path`**: `removed / LOCKED / already gone / BLOCKED`. `SilentlyContinue` прячет провалы — не полагайся на него.
+- **`BLOCKED` — системный корень**: `Remove-Target`/`Remove-Contents` железно не трогают `%SystemRoot%\WinSxS`, `\System32`, `\SysWOW64`, `\assembly`, `\ServiceProfiles` (защита `Test-ProtectedRoot` в `cleanup-common.ps1`, статус `BLOCKED`). Это страховка от ошибки агента, а не замена ворот — не пытайся обойти; легитимное системное (`Windows\Temp`, SoftwareDistribution, `$WINDOWS.~BT`) под неё не попадает.
+- **UserAssist ROT13 — только буквы**: `Un13` в `unused-detect.ps1` вращает лишь A–Z/a–z, а цифры/`\`/`:`/`()` оставляет как есть — это ровно формат Windows (пути в UserAssist содержат цифры вроде `(x86)`). Это не баг «не обрабатывает цифры» — так и должно быть.
 - **LOCKED-процедура**: ретрай → `Stop-Process` держателя → остановка SearchIndexer (часто не помогает) → `scripts/pending-delete.ps1` (PendingFileRenameOperations — удаление при перезагрузке).
 - **UAC-дисциплина**: не спамим. Один промпт на проход, цель ≤2 прохода/сессия (потолок 3). **Сгоревшие из-за сбоя промпты считать отдельно** от рабочих и при необходимости дозапрашивать с явного «да». Отменённый UAC → «не выполненное» в отчёт, спросить в конце один раз; повторный промпт — только по явной просьбе.
 - **Тайм-ауты**: MSI 240–300 с; весь прямой elevated-проход целиком 30–50 мин; сканы 1–10 мин (single-pass `scripts/scan.ps1` — в разы быстрее старых кастомных обходов; параллельные сканы на SATA-SSD конкурируют за диск и суммарно медленнее).
@@ -165,7 +167,7 @@ Desktop user+Public, Start Menu user+ProgramData; `.lnk` и `.url`. Скрипт
 
 - **Baseline**: свободное место целевых томов фиксируется в `ledger.csv` сразу после Фазы 0 (`scripts/phase0.ps1`).
 - Для каждой фазы: дельта по `Get-Volume` + каждая операция удаления → строка в `ledger.csv` (`removed_mb`); текстовые логи — для деталей.
-- Для каждого удаления: `Test-Path` → статус `removed / LOCKED / already gone`.
+- Для каждого удаления: `Test-Path` → статус `removed / LOCKED / already gone / BLOCKED`.
 - Итог (Фаза 10): свод из `ledger.csv` через `scripts/ledger-report.ps1` (baseline, по фазам, дельта томов) + сверка «не удалено по решению: …».
 - Todo-шаг помечается completed только после прохождения верификации этой фазы.
 
@@ -178,7 +180,7 @@ Desktop user+Public, Start Menu user+ProgramData; `.lnk` и `.url`. Скрипт
 
 ## Scripts
 
-- `scripts/cleanup-common.ps1` — общая библиотека: размеры, `Remove-Target`/`Remove-Contents` (статусы removed/already gone/LOCKED), `Get-ExePath`, лидгер, юнит-готовые помощники. Подключается `.`-source в phase-скрипты.
+- `scripts/cleanup-common.ps1` — общая библиотека: размеры, `Remove-Target`/`Remove-Contents` (статусы removed / already gone / LOCKED / BLOCKED; системные корни защищены `Test-ProtectedRoot`), `Get-ExePath`, лидгер, юнит-готовые помощники. Подключается `.`-source в phase-скрипты.
 - `scripts/phase0.ps1` — контекст (ОС/диски/права/TEMP) + baseline свободного места в `ledger.csv`.
 - `scripts/scan.ps1` — инвентаризация корня: карта топ-папок + топ-файлов + кандидаты дублей за ОДИН проход; исключения (рабочая папка/корзина/SVI), системные дубли в `dupes_system.txt`.
 - `scripts/inventory-quick.ps1` — `installed.csv` (+ Hive/LocExists), установщики, корзины (`$R*`), кэши по профилям.

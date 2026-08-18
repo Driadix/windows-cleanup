@@ -91,9 +91,33 @@ function Test-LnkAlive([string]$Path) {
     return (Test-Path -LiteralPath $target)
 }
 
+function Test-ProtectedRoot([string]$Path) {
+    # Defense-in-depth: возвращает $true, если $Path — сам защищённый системный корень
+    # или лежит внутри него. Ворота (согласие пользователя) — первая линия; этот жёсткий
+    # блок — вторая, на случай ошибки агента/скрипта. Удаление внутри этих корней никогда
+    # не легитимно для скилла; легитимное системное (Windows\Temp, SoftwareDistribution,
+    # $WINDOWS.~BT и т.п.) намеренно НЕ входит в список.
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    $sr = ($env:SystemRoot -replace '[\/]+$', '').ToUpperInvariant()
+    $protected = @(
+        "$sr\WINSXS",
+        "$sr\SYSTEM32",
+        "$sr\SYSWOW64",
+        "$sr\ASSEMBLY",
+        "$sr\SERVICEPROFILES"
+    )
+    $p = ([string]$Path).Replace('/','\').ToUpperInvariant().TrimEnd('\')
+    foreach ($pr in $protected) {
+        if ($p -eq $pr -or $p.StartsWith($pr + '\')) { return $true }
+    }
+    return $false
+}
+
 function Remove-Target {
     # Удалить файл ИЛИ папку целиком. Возвращает объект: Status / RemovedBytes / RemainsBytes.
+    # Status: removed | already gone | LOCKED | BLOCKED (системный корень — не трогаем).
     param([Parameter(Mandatory=$true)][string]$Path)
+    if (Test-ProtectedRoot $Path) { return [pscustomobject]@{ Status='BLOCKED'; RemovedBytes=0L; RemainsBytes=0L } }
     if (-not (Test-Path -LiteralPath $Path)) { return [pscustomobject]@{ Status='already gone'; RemovedBytes=0L; RemainsBytes=0L } }
     $before = Get-SizeBytes -Path $Path
     $ok = $false
@@ -112,6 +136,7 @@ function Remove-Contents {
     $before = Get-SizeBytes -Path $Path
     $removed = 0L; $lockedCnt = 0
     foreach ($item in (Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue)) {
+        if (Test-ProtectedRoot $item.FullName) { $lockedCnt++; continue }  # системный корень внутри — не трогаем
         $sz = if ($item.PSIsContainer) { Get-SizeBytes -Path $item.FullName } else { [long]$item.Length }
         try {
             Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction Stop

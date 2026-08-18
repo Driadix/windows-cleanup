@@ -129,3 +129,39 @@ Cuphead (Steam, `D:\Games\Steam\steamapps\...`) попал в кандидаты
 
 ### Z5. `scan.ps1` переоценка Office-кеша
 В Фазе 3 я оценил C1 «~0,3 ГБ» по дублям (2×MSORES.DLL + 2×EXCEL.EXE), а фактически папка `Updates\Download` — 946,5 МБ. Пояснение: в отчёте по дублям видны только парные файлы, полный объём кеша заметно больше. Учебное: размер «дубль-пары» ≠ размер каталога-источника.
+
+---
+
+# Раунд 2 (2026-08-19): проверка внешнего анализа скилла → правки 0.2.1
+
+Поступил большой список предполагаемых слабостей/багов (похоже, сгенерированный LLM). По задаче — **не верить на слово, проверить каждое по коду и достоверным источникам** и внести только реально нужное. Проверка: чтение всех скриптов, эмпирические тесты на живой системе, Microsoft Learn / GitHub MSDocs.
+
+**Метод проверки фактов:**
+- «PS 5.1 `Get-ChildItem -Recurse` следует за junction → цикл/stack overflow» — **эмпирика на живой машине** (создан само-ссылающийся junction-цикл `real\loop → jwctest`): PS 5.1 НЕ заходит в junction, цикла нет. Заявленный риск не воспроизводится.
+- «UserAssist ROT13 не обрабатывает цифры → мусор» — `Un13` вращает только A–Z/a–z, остальное проходит как есть (roundtrip-тест). Это ровно формат UserAssist (цифры/разделители не кодируются). Не баг.
+- Документация `-FollowSymlink` (MS Learn): параметр введён в PS 6.0; в Windows PowerShell 5.1 рекурсия junction НЕ следует (совпало с эмпирикой).
+
+**Внесённые правки (реально нужные):**
+
+| Правка | Файл | Что |
+|---|---|---|
+| URL-локации | `scripts/inventory-quick.ps1` | `InstallLocation` = URL (`@url:…`, `http://…`, `ms-internal:…`) больше не «missing»-сирота, а «локации нет» (LocKind=none) |
+| Системный guard | `scripts/cleanup-common.ps1` | `Test-ProtectedRoot` + статус `BLOCKED`: WinSxS/System32/SysWOW64/assembly/ServiceProfiles не удаляются физически (defense-in-depth; `Remove-Contents` тоже) |
+| Защита очереди | `scripts/pending-delete.ps1` | Перед записью PendingFileRenameOperations — проверка объёма (потолок ~30К симв, при превышении exit 2 без записи) |
+| Док: параметры scan | `references/inventory.md` | `-MinDupBytes`, `-Top`, `-SkipSystemDupes` — настраиваемые (не «хардкод») |
+| SKILL.md | `windows-cleanup/SKILL.md` | версия **0.2.1**; статус `BLOCKED` в словаре статусов и критериях; питфоллы (BLOCKED, ROT13) |
+| Генерик-уроки | `windows-powershell` skill | PS 5.1 junction-эмпирика; URL в InstallLocation/UninstallString |
+| Тесты | `tools/smoke_test.ps1` | +4 ассерта: BLOCKED для System32/WinSxS, разрешённые temp/Windows\Temp |
+
+**Отвергнуто (проверено и не подтвердилось / уже покрыто):**
+- **«SKILL.md ~600 строк, Pitfalls ~80»** — фактически 194 строки, Pitfalls ~27 пунктов; структура уже соответствует рекомендуемой (Meta/When-to-use/Prereqs/Quick-Reference/Pitfalls/References). Реструктуризация не нужна.
+- **`Get-ExePath` `^"([^"]+)"` «не эскейпит кавычки»** — в командных строках Windows кавычки не эскейпятся бэкслешем (задвоение `""` — патология); покрыто smoke-тестами.
+- **`Remove-Target` «без try/finally, $before не запишется»** — try/catch есть, `$before` берётся до удаления; LOCKED возвращает остаток.
+- **`Write-Ledger` «`-replace '[,;]'` искажает имена»** — намеренная защита CSV (поля контролируемые); не искажение.
+- **`scan.ps1` «Sort-Object scriptblock на миллионах»** — тяжёлая часть уже инкрементальный top-N аккумулятор; `Sort-Object` остался только на маленьком финальном списке дублей.
+- **«Счётчик в elevated не вернётся в user-сессию»** — `$script:totalMB` корректен в своём процессе; источник истины — общий `ledger.csv`, который суммирует `ledger-report`.
+- **«autostart: Execute=$null падает»** — `[string]$null` обрабатывается, статус `(пусто)`.
+- **«Get-Volume пустой/падение»**, **«CSV-валидация»**, **«PS-версия 5.1+»**, **«TOCTOU/race»**, **«EventLog для аудита»**, **«-WhatIf dry-run»**, **«PARTIAL-статус фаз»**, **«прогресс-бар скана»**, **«tone-guide/глоссарий/эмодзи»** — не нужны: уже покрыто воркфлоу (гейты, ledger-аудит, report-then-approve), README/CONTEXT.md, либо меняет проверенный флоу без выгоды.
+- **«Проверка Prefetch / подписи .exe / Test-DiskSpace»** — вне дизайна «только кандидаты» (ADR-0004); удаление и так гейтится пользователем.
+
+**Проверка после правок:** `tools/validate.py` — VALIDATE OK (все 14 скриптов проходят parse-check); `tools/smoke_test.ps1` — ALL SMOKE TESTS PASSED (34 ассерта).
