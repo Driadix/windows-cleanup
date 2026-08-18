@@ -4,9 +4,11 @@ param(
     [switch]$Remove
 )
 
-# Поиск битых ярлыков (.lnk/.url) в 4 стандартных местах.
+# Поиск битых ярлыков в 4 стандартных местах (.lnk и .url).
 # Использование: powershell.exe -NoProfile -ExecutionPolicy Bypass -File shortcuts.ps1 -OutDir "<рабочая папка>"
-# Без -Remove — только отчёт; с -Remove — удаляет битые (с тест-патом и логом). Живые никогда не трогаются.
+# Без -Remove — только отчёт; с -Remove — удаляет битые (с логом). Живые никогда не трогаются.
+# Нюансы: .url — это INI ([InternetShortcut] URL=...); для веб-ссылки TargetPath пустой легитимно,
+# поэтому .url считается битой только при пустой/отсутствующей URL=. Отчёт пишем построчно без усечения путей.
 
 $ErrorActionPreference = 'SilentlyContinue'
 $sh = New-Object -ComObject WScript.Shell
@@ -18,23 +20,44 @@ $places = @(
     "$env:ProgramData\Microsoft\Windows\Start Menu\Programs"
 )
 
+function Test-UrlBroken([string]$path) {
+    $content = $null
+    try { $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8 } catch { }
+    if ($null -eq $content) { try { $content = Get-Content -LiteralPath $path -Raw } catch { } }
+    $m = [regex]::Match([string]$content, '(?im)^URL=[ \t]*(.+?)\s*$')
+    return (-not $m.Success) -or [string]::IsNullOrWhiteSpace($m.Groups[1].Value)
+}
+
 $broken = @(); $alive = 0
 foreach ($p in $places) {
     if (-not (Test-Path -LiteralPath $p)) { continue }
-    Get-ChildItem -LiteralPath $p -Recurse -File -Include *.lnk,*.url |
+    # -Include нельзя с -LiteralPath (пропускает фильтр) → фильтруем по Extension явно
+    Get-ChildItem -LiteralPath $p -Recurse -Force -File |
+        Where-Object { $_.Extension -in '.lnk', '.url' } |
         ForEach-Object {
-            try {
-                $target = $sh.CreateShortcut($_.FullName).TargetPath
-                if ([string]::IsNullOrWhiteSpace($target) -or -not (Test-Path -LiteralPath $target)) {
-                    $broken += [pscustomobject]@{ Link = $_.FullName; Target = $target }
+            $f = $_.FullName
+            if ($_.Extension -eq '.lnk') {
+                $target = ''
+                try { $target = $sh.CreateShortcut($f).TargetPath } catch { }
+                if ([string]::IsNullOrWhiteSpace($target)) {
+                    # Пустая цель = shell-объект/verbm (Этот компьютер, Панель управления...) — НЕ битая, не трогаем
+                    $alive++
+                } elseif ($target -like '::*' -or $target -match '^(shell|folder|appx?|digitalsigner|ms-settings):') {
+                    $alive++   # namespace-таргеты (shell:, ms-settings: и т.п.) — валидны
+                } elseif (-not (Test-Path -LiteralPath $target)) {
+                    $broken += [pscustomobject]@{ Link = $f; Target = $target }
                 } else { $alive++ }
-            } catch { $broken += [pscustomobject]@{ Link = $_.FullName; Target = '(ошибка чтения)' } }
+            } else {
+                # .url: битая, только если URL отсутствует/пустая
+                if (Test-UrlBroken $f) { $broken += [pscustomobject]@{ Link = $f; Target = '(нет URL)' } }
+                else { $alive++ }
+            }
         }
 }
 
 if (-not (Test-Path -LiteralPath $OutDir)) { New-Item -ItemType Directory -Path $OutDir -Force | Out-Null }
 $report = Join-Path $OutDir 'broken_shortcuts.txt'
-$broken | Sort-Object Link | Format-Table -AutoSize | Out-File -FilePath $report -Encoding UTF8
+$broken | ForEach-Object { "$($_.Link)`t$($_.Target)" } | Set-Content -Path $report -Encoding UTF8
 
 if ($Remove) {
     $log = Join-Path $OutDir 'broken_shortcuts_log.txt'
