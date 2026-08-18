@@ -127,6 +127,9 @@ function Init-Ledger {
 
 function Write-Ledger {
     # Дописать строку в ledger.csv. size_* в МБ (0, если не измерялось).
+    # ВАЖНО: числовые поля форматируем с ИНВАРИАНТНОЙ культурой (точка как разделитель),
+    # иначе в ru-RU '56697.07' печатается как '56697,07' — запятая разрывает CSV-колонки
+    # и все поля следом съезжают (baseline/removed/status). Реальный кейс из тестового прогона.
     param(
         [Parameter(Mandatory=$true)][string]$Path,
         [string]$Phase,
@@ -137,6 +140,7 @@ function Write-Ledger {
         [string]$Status = '',
         [double]$RemovedMB = 0
     )
-    $row = '{0},{1},{2},{3},{4},{5},{6},{7}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Phase, ($Object -replace '[,;]',' '), ($TargetPath -replace '[,";]',' '), $SizeBeforeMB, $SizeAfterMB, ($Status -replace '[,";]',''), $RemovedMB
+    $ci = [System.Globalization.CultureInfo]::InvariantCulture
+    $row = '{0},{1},{2},{3},{4},{5},{6},{7}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Phase, ($Object -replace '[,;]',' '), ($TargetPath -replace '[,";]',' '), ([double]$SizeBeforeMB).ToString('0.####', $ci), ([double]$SizeAfterMB).ToString('0.####', $ci), ($Status -replace '[,";]',''), ([double]$RemovedMB).ToString('0.####', $ci)
     Add-Content -Path $Path -Value $row -Encoding UTF8
 }

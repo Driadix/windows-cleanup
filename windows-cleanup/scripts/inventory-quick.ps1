@@ -37,7 +37,7 @@ $rows | Sort-Object Name | Export-Csv -Path (Join-Path $Work 'installed.csv') -N
 
 # ---------- 2. Установщики в пользовательских папках ----------
 $ins = @()
-foreach ($d in @($env:USERPROFILE + '\Desktop', $env:USERPROFILE + '\Downloads', $env:USERPROFILE + '\Documents')) {
+foreach ($d in @(($env:USERPROFILE + '\Desktop'), ($env:USERPROFILE + '\Downloads'), ($env:USERPROFILE + '\Documents'))) {
     if (Test-Path -LiteralPath $d) {
         Get-ChildItem -LiteralPath $d -File -ErrorAction SilentlyContinue |
             Where-Object { $_.Extension -in '.exe','.msi','.zip','.iso','.rar','.7z' } |
