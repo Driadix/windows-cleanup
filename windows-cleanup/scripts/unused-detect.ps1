@@ -37,7 +37,7 @@ foreach ($t in (Get-ScheduledTask -ErrorAction SilentlyContinue)) {
 $procs = @(Get-Process -ErrorAction SilentlyContinue | Select-Object -ExpandProperty ProcessName -Unique | ForEach-Object { ($_ -replace '[^a-z0-9]','').ToUpperInvariant() })
 
 # --- компоненты/рантаймы — не кандидаты ---
-$skipRe = '(\.NET|Visual C\+\+|vcredist|XNA|ClickOnce|Launcher Prerequisites|UE4 Prerequisites|Microsoft Windows Desktop|Microsoft\.NET|Office 16|Update for x64|vcpp_crt|Visual C\+\+ Library|DiagnosticsHub|IntelliTrace|IIS|Microsoft Update Health|Web Deploy|NetStandard|Python Launcher|Java\(|Chocolatey|Go Programming|Node\.js|NVIDIA|AMD|Steam |Riot|Paradox|AMDAutoUpdate|WSL|LocalDB|SQL Server)'
+$skipRe = '(\.NET|Visual C\+\+|vcredist|XNA|ClickOnce|Launcher Prerequisites|UE4 Prerequisites|Microsoft Windows Desktop|Microsoft\.NET|Office 16|Update for x64|vcpp_crt|Visual C\+\+ Library|DiagnosticsHub|IntelliTrace|IIS|Microsoft Update Health|Web Deploy|NetStandard|Python Launcher|Java\(|Chocolatey|Go Programming|Node\.js|NVIDIA|AMD|Steam\b|Riot|Paradox|AMDAutoUpdate|WSL|LocalDB|SQL Server)'
 $rows = Import-Csv -LiteralPath (Join-Path $Work 'installed.csv') -Encoding UTF8
 $now = Get-Date
 
@@ -47,6 +47,9 @@ foreach ($r in $rows) {
     if ($r.Name -match $skipRe) { continue }
     $loc = ($r.Loc -replace '\\$','')
     if (-not $loc -or -not (Test-Path -LiteralPath $loc)) { continue }
+    # Steam-игры/библиотеки — НЕ кандидаты: удаление только через клиент Steam, след запуска
+    # недостоверен (игры через чужие лаунчеры не пишут MuiCache/UserAssist) — см. U4.
+    if ($loc -match '\\Steam( Library)?\\steamapps\\|\\steamapps\\common\\') { continue }
     $sz = Get-SizeBytes -Path $loc
     if ($sz -lt 50MB) { continue }
     $exes = @(Get-ChildItem -LiteralPath $loc -Recurse -Filter '*.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 5 | Select-Object -ExpandProperty FullName)
