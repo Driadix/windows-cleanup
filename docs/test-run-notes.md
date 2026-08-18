@@ -41,7 +41,7 @@
 - ✅ **U1** (fmt-N инвариантные числа), **U4** (steam-games.ps1 + фильтр Steam в unused-detect), **U6** (LocKind) — внедрены и задеплоены (95eb5c4, c43b7cc).
 - ✅ **U5** (bash-безопасный вызов run-elevated -Args) — задокументировано в шапке run-elevated.ps1 и Pitfalls (коммит после c43b7cc).
 - ✅ **Адаптивный Steam-поиск** — реестр InstallPath + shallow-скан по томам + цепочка libraryfolders.vdf; в прогоне находит нестандартный `D:\Games\Steam` (102 ГБ).
-- ⬜ **U2/U3** — TODO: ворота дисков vs кэши на других томах; упоминание `.gitignore` в самом скилле.
+- ✅ **U2** (`inventory-quick -Disks`: кэши на невыбранных томах метятся «вне выбранных дисков», в Фазе 4 — чистим только выбранные) и **U3** (заметка про `.gitignore` в Prerequisites) — внедрены и задеплоены.
 
 ---
 

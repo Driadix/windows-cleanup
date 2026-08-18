@@ -1,9 +1,11 @@
 # inventory-quick.ps1 — быстрая часть Фазы 2: программы (CSV), установщики, корзины, кэши.
-# Использование: powershell.exe -NoProfile -ExecutionPolicy Bypass -File inventory-quick.ps1 -Work "рабочая папка"
-# Выход (в -Work): installed.csv (с Hive и LocExists), installers.txt, recyclebin.txt, cache_sizes.txt.
+# Использование: powershell.exe -NoProfile -ExecutionPolicy Bypass -File inventory-quick.ps1 -Work "рабочая папка" [-Disks 'C'] [-Disks 'C','D']
+#   -Disks: буквы выбранных в Фазе 1 дисков (например 'C'). Кэши на других томах (например %TEMP% на D:)
+#           помечаются в cache_sizes.txt как «вне выбранных дисков» — по умолчанию в очистку не идут (U2).
+# Выход (в -Work): installed.csv (с Hive и LocExists/LocKind), installers.txt, recyclebin.txt, cache_sizes.txt.
 #   Корзины считаем ТОЛЬКО по файлам $R* (их сумма = реальные данные; $I-метаданные не считаем).
 #   Кэши браузеров — по профилям (Default, Profile *), не хардкодим "Default".
-param([Parameter(Mandatory=$true)][string]$Work)
+param([Parameter(Mandatory=$true)][string]$Work, [string[]]$Disks = @())
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $here 'cleanup-common.ps1')
 $ErrorActionPreference = 'Continue'
@@ -103,10 +105,14 @@ $cTargets += @(
     [pscustomobject]@{ N='electron Cache'; Path="$env:LOCALAPPDATA\electron\Cache" },
     [pscustomobject]@{ N='VS Code CachedExtensionVSIXs'; Path="$env:APPDATA\Code\CachedExtensionVSIXs" }
 )
+$selDisks = @($Disks | ForEach-Object { ($_.TrimEnd(':')).ToUpperInvariant() })
 $cLines = foreach ($t in $cTargets) {
     $sz = Get-SizeBytes -Path $t.Path
     if (-not (Test-Path -LiteralPath $t.Path)) { "{0}`t(нет)`t{1}" -f '-', $t.Path; continue }
-    "{0}`t{1} ГБ`t{2}" -f $t.N, (fmt-N ($sz/1GB) 3), $t.Path
+    $vol = ([IO.Path]::GetPathRoot($t.Path)).TrimEnd('\')
+    $onSel = (-not $selDisks) -or ($selDisks -contains (($vol.TrimEnd(':')).ToUpperInvariant()))
+    $flag = if ($onSel) { '' } else { '  [том ' + $vol + ' — вне выбранных дисков]' }
+    "{0}`t{1} ГБ`t{2}{3}" -f $t.N, (fmt-N ($sz/1GB) 3), $t.Path, $flag
 }
 $cLines | Set-Content -Path (Join-Path $Work 'cache_sizes.txt') -Encoding UTF8
 
