@@ -1,7 +1,7 @@
 ---
 name: windows-cleanup
 description: "Semi-auto Windows PC cleanup: caches, junk, apps, space."
-version: 0.1.0
+version: 0.2.0
 author: Driadix, Hermes Agent
 license: MIT
 platforms: [windows]
@@ -37,6 +37,16 @@ metadata:
 ## How to Run
 
 Полный воркфлоу — процедура ниже, фазы 0–10. Точечный запрос — нужная фаза(ы): контекст (0) и ворота дисков (1) проходятся быстро, затем целевая фаза. Скрипты-помощники лежат рядом со скиллом в `scripts/`; путь к папке скилла — `skill_view` (поле `skill_dir`) или `${env:USERPROFILE}\AppData\Local\hermes\skills\maintenance\windows-cleanup\`. Запуск: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "<skill_dir>\scripts\<имя>.ps1" <аргументы>`.
+
+## Диагностика (observations.md)
+
+Во время прогона ведём **диагностический журнал `observations.md`** в рабочей папке (она и так исключена из очистки) — чтобы тестер/юзер мог вернуть его и мы поняли, где затупы и почему. Это **не влияет на основной воркфлоу**: только дописывает строку.
+
+- **Как**: `scripts/observe.ps1 -Work "<рабочая папка>" -Level <info|warn|error> -Phase "<фаза>" -Msg "<что случилось>"`. По умолчанию **включено**; разово отключить — `$env:PC_CLEANUP_DIAG='0'` (в bash `export PC_CLEANUP_DIAG=0`).
+- **Когда писать** (триггеры): ошибка/нестандартный вывод скрипта; non-zero exit; `LOCKED`-цель; «неизвестное» на системном томе; затык или отказ пользователя на воротах (что именно не зашло); идея-улучшение/баг, замеченные по ходу; любой неожиданный результат фазы.
+- **Уровни**: `info` (заметка/факт), `warn` (нечто сомнительное), `error` (что-то сломалось/упало).
+- В шапке файла сами пишутся ОС/PS/машина/рабочая папка. В конце прогона (Фаза 10) упомяни, что файл существует, и попроси юзера прислать его при отзыве.
+- **Выкорчевать целиком**: удалить `scripts/observe.ps1` + эту секцию (основной воркфлоу не трогаем вообще).
 
 ## Quick Reference
 
@@ -181,3 +191,4 @@ Desktop user+Public, Start Menu user+ProgramData; `.lnk` и `.url`. Скрипт
 - `scripts/steam-games.ps1` — ИНФОРМАЦИЯ о Steam-библиотеках → `steam_games.txt` (топ игр по размеру; удаление только через Steam; не кандидаты — блок «где место»).
 - `scripts/shortcuts.ps1` — поиск битых ярлыков (.lnk/.url) в 4 стандартных местах.
 - `scripts/pending-delete.ps1` — удаление заблокированных файлов при перезагрузке (PendingFileRenameOperations; elevated).
+- `scripts/observe.ps1` — диагностический журнал `observations.md` (append; включён по умолчанию, off через `PC_CLEANUP_DIAG=0`; на воркфлоу не влияет).
