@@ -11,36 +11,56 @@ $out = Join-Path $Work 'steam_games.txt'
 if (Test-Path -LiteralPath $out) { Remove-Item -LiteralPath $out -Force }
 if (-not (Test-Path -LiteralPath $Work)) { New-Item -ItemType Directory -Path $Work -Force | Out-Null }
 
+$fixedVols = @(Get-Volume | Where-Object { $_.DriveLetter -and $_.DriveType -ne 2 -and $_.DriveType -ne 4 -and $_.DriveType -ne 5 })
 $roots = New-Object 'System.Collections.Generic.HashSet[string]'
 $realRoots = @{}   # ключ (upper) -> реальный путь с исходным регистром (для вывода без ЗАГЛАВНЫХ)
 function Norm-Lib([string]$p) {
     # ключ дедупликации: полный путь, один слэш, верхний регистр (в VDF/путях могут быть двойные \\)
     return [IO.Path]::GetFullPath($p).TrimEnd('\').ToUpperInvariant()
 }
-$rel = @('steamapps', 'Steam\steamapps', 'SteamLibrary\steamapps', 'Games\Steam\steamapps', 'Program Files (x86)\Steam\steamapps')
-foreach ($v in (Get-Volume | Where-Object { $_.DriveLetter -and $_.DriveType -ne 2 -and $_.DriveType -ne 4 -and $_.DriveType -ne 5 })) {
-    $r = $v.DriveLetter + ':\'
-    foreach ($x in $rel) {
-        $p = Join-Path $r $x
-        if (Test-Path -LiteralPath $p) {
-            $k = Norm-Lib $p
-            if ($roots.Add($k)) { $realRoots[$k] = $p }
-        }
+function Add-Root([string]$p) {
+    if (-not $p) { return }
+    if (Test-Path -LiteralPath $p) {
+        $k = Norm-Lib $p
+        if ($roots.Add($k)) { $realRoots[$k] = ([IO.Path]::GetFullPath($p)) }
     }
 }
-# дополнительные библиотеки из libraryfolders.vdf (только существующие steamapps)
-foreach ($root in @($realRoots.Values)) {
-    $vdf = Join-Path $root 'libraryfolders.vdf'
-    if (Test-Path -LiteralPath $vdf) {
-        $txt = Get-Content -LiteralPath $vdf -Raw -ErrorAction SilentlyContinue
-        foreach ($m in [regex]::Matches([string]$txt, '"path"\s+"([^"]+)"')) {
-            $sa = Join-Path ($m.Groups[1].Value.TrimEnd('\')) 'steamapps'
-            if (Test-Path -LiteralPath $sa) {
-                $k = Norm-Lib $sa
-                if ($roots.Add($k)) { $realRoots[$k] = ([IO.Path]::GetFullPath($sa)) }
+# 1) фиксированные относительные пути (быстрая страховка)
+$rel = @('steamapps', 'Steam\steamapps', 'SteamLibrary\steamapps', 'Games\Steam\steamapps', 'Program Files (x86)\Steam\steamapps')
+foreach ($v in $fixedVols) {
+    $r = $v.DriveLetter + ':\'
+    foreach ($x in $rel) { Add-Root (Join-Path $r $x) }
+}
+# 2) клиент Steam по реестру (InstallPath) — адаптивно к нестандартной установке клиента
+foreach ($hk in @('HKLM:\Software\WOW6432Node\Valve\Steam','HKLM:\Software\Valve\Steam','HKCU:\Software\Valve\Steam')) {
+    $ip = (Get-ItemProperty -LiteralPath $hk -Name 'InstallPath' -ErrorAction SilentlyContinue).InstallPath
+    if ($ip) { Add-Root (Join-Path $ip 'steamapps') }
+}
+# 3) адаптивный shallow-скан: топ-уровень каждого фикс-тома — любые папки, внутри которых есть steamapps
+foreach ($v in $fixedVols) {
+    $r = $v.DriveLetter + ':\'
+    foreach ($d in (Get-ChildItem -LiteralPath $r -Directory -Force -ErrorAction SilentlyContinue)) {
+        Add-Root (Join-Path $d.FullName 'steamapps')
+    }
+}
+# 4) цепочка libraryfolders.vdf: из каждого найденного корня добираем ВСЕ библиотеки (не только стандартные)
+for ($round = 0; $round -lt 10; $round++) {
+    $check = @($realRoots.Values)
+    if (-not $check) { break }
+    $added = $false
+    foreach ($root in $check) {
+        $vdf = Join-Path $root 'libraryfolders.vdf'
+        if (Test-Path -LiteralPath $vdf) {
+            $txt = Get-Content -LiteralPath $vdf -Raw -ErrorAction SilentlyContinue
+            foreach ($m in [regex]::Matches([string]$txt, '"path"\s+"([^"]+)"')) {
+                $sa = Join-Path ($m.Groups[1].Value.TrimEnd('\')) 'steamapps'
+                $cnt = $roots.Count
+                Add-Root $sa
+                if ($roots.Count -gt $cnt) { $added = $true }
             }
         }
     }
+    if (-not $added) { break }
 }
 
 $rows = @()
