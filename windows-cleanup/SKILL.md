@@ -1,6 +1,6 @@
 ---
 name: windows-cleanup
-description: Semi-auto Windows PC cleanup: caches, junk, apps, space.
+description: "Semi-auto Windows PC cleanup: caches, junk, apps, space."
 version: 0.1.0
 author: Driadix, Hermes Agent
 license: MIT
