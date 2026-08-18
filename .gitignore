@@ -1,0 +1,14 @@
+# Локальные логи и временное
+pc-cleanup-logs/
+**/pc-cleanup-logs/
+*.log
+*.tmp
+
+# Системное
+Thumbs.db
+.DS_Store
+Desktop.ini
+
+# IDE
+.vscode/
+.idea/
