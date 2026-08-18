@@ -28,6 +28,14 @@ function Format-Mb([long]$Bytes) {
     return '{0:N1}' -f ($Bytes / 1MB)
 }
 
+function fmt-N {
+    # Форматирование числа с ИНВАРИАНТНОЙ культурой (разделитель — точка) для CSV/TSV-выходов.
+    # В ru-RU `-f` печатает '56697,07' — запятая разрывает CSV-колонки и ломает парсинг
+    # (реальный кейс: ledger.csv в тестовом прогоне). Для человекочитаемых логов оставляем -f.
+    param([double]$Value, [int]$Decimals = 2)
+    return ([double]$Value).ToString(('0.' + ('#' * $Decimals)), [System.Globalization.CultureInfo]::InvariantCulture)
+}
+
 function Get-VolumeBrief {
     # Строки по томам с буквой:  "C: | label=X | free 54,20 ГБ"
     Get-Volume | Where-Object DriveLetter | ForEach-Object {

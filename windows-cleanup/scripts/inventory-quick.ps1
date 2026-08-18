@@ -27,8 +27,16 @@ foreach ($h in $hives.Keys) {
             if ($m.Success) { $dir = [IO.Path]::GetDirectoryName($m.Groups[1].Value) }
         }
         $locExists = (-not $dir) -or (Test-Path -LiteralPath $dir)
+        # LocKind: 'ok' / 'missing' / 'packagecache' / 'none' — чтобы Фаза 6 не считала
+        # Installation-кеши (C:\ProgramData\Package Cache\{GUID}) ложными «сиротами» (см. U6).
+        $locKind = 'none'
+        if ($dir) {
+            if ($dir -match '\\Package Cache\\') { $locKind = 'packagecache' }
+            elseif (Test-Path -LiteralPath $dir) { $locKind = 'ok' }
+            else { $locKind = 'missing' }
+        }
         $rows += [pscustomobject]@{
-            Name = $name; Ver = $p.DisplayVersion; Hive = $hives[$h]; Loc = $dir; LocExists = $locExists
+            Name = $name; Ver = $p.DisplayVersion; Hive = $hives[$h]; Loc = $dir; LocExists = $locExists; LocKind = $locKind
             Uninst = $p.UninstallString; Code = $p.ProductCode; Date = $p.InstallDate; SizeMB = $p.EstimatedSize
         }
     }
@@ -44,8 +52,14 @@ foreach ($d in @(($env:USERPROFILE + '\Desktop'), ($env:USERPROFILE + '\Download
             ForEach-Object { $ins += [pscustomobject]@{ GB=[math]::Round($_.Length/1GB,2); Last=$_.LastWriteTime.ToString('yyyy-MM-dd'); Path=$_.FullName } }
     }
 }
-$ins | Sort-Object GB -Descending | ForEach-Object { "{0}`t{1}`t{2}" -f $_.GB, $_.Last, $_.Path } |
-    Set-Content -Path (Join-Path $Work 'installers.txt') -Encoding UTF8
+if ($ins.Count) {
+    $ins | Sort-Object GB -Descending | ForEach-Object { "{0}`t{1}`t{2}" -f (fmt-N $_.GB 2), $_.Last, $_.Path } |
+        Set-Content -Path (Join-Path $Work 'installers.txt') -Encoding UTF8
+} else {
+    # Set-Content с пустым пайплайном НЕ перезаписывает файл — останется устаревший список
+    # (реальный кейс тестового прогона: бывшие установщики продолжали «жить» в installers.txt).
+    '(пусто — установщиков нет)' | Set-Content -Path (Join-Path $Work 'installers.txt') -Encoding UTF8
+}
 
 # ---------- 3. Корзины по дискам (только $R*) ----------
 # DriveType у Get-Volume — enum; явно исключаем съёмные(2)/сетевые(4)/CD(5)
@@ -92,7 +106,7 @@ $cTargets += @(
 $cLines = foreach ($t in $cTargets) {
     $sz = Get-SizeBytes -Path $t.Path
     if (-not (Test-Path -LiteralPath $t.Path)) { "{0}`t(нет)`t{1}" -f '-', $t.Path; continue }
-    "{0}`t{1} ГБ`t{2}" -f $t.N, [math]::Round($sz/1GB,3), $t.Path
+    "{0}`t{1} ГБ`t{2}" -f $t.N, (fmt-N ($sz/1GB) 3), $t.Path
 }
 $cLines | Set-Content -Path (Join-Path $Work 'cache_sizes.txt') -Encoding UTF8
 

@@ -83,7 +83,8 @@ foreach ($d in (Get-ChildItem -LiteralPath $rootWin -Directory -Force -ErrorActi
 }
 
 $dirRows = $dirSizes.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First $Top | ForEach-Object {
-    "{0:N2}`t{1}" -f ($_.Value / 1GB), $_.Key
+    # число с точкой (инвариантная культура) — в ru-RU N2 дало бы '56 697,00' (NBSP+запятая)
+    "{0}`t{1}" -f (($_.Value / 1GB).ToString('0.##', [System.Globalization.CultureInfo]::InvariantCulture)), $_.Key
 }
 if ($dirRows) { $dirRows | Set-Content -Path $dirTop -Encoding UTF8 } else { '(пусто — совпадений нет)' | Set-Content -Path $dirTop -Encoding UTF8 }
 
