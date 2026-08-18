@@ -1,7 +1,7 @@
 ---
 name: windows-cleanup
 description: "Semi-auto Windows PC cleanup: caches, junk, apps, space."
-version: 0.2.1
+version: 0.2.2
 author: Driadix
 license: MIT
 platforms: [windows]
@@ -140,7 +140,7 @@ Desktop user+Public, Start Menu user+ProgramData; `.lnk` и `.url`. Скрипт
 
 - **`Del` — алиас `Remove-Item`**: функция с именем `Del` молча не вызывается. Аналогично — **любые имена-ключевые слова** (`Do`, `ForEach`, `Dir` и т.п.): скрипт может молча не загрузиться или упасть на парсинге (реальный кейс: `Do`-функция в elevated-скрипте). Используй глагол-существительное (`Remove-Target`, `Do-Clean`, `Write-Ledger`).
 - **Перед elevated-запуском всегда `[Parser]::ParseFile`** — дешёвый способ не жечь UAC впустую; готовый шаблон — `scripts/run-elevated.ps1`.
-- **`run-elevated.ps1 -Args @(...)` из git-bash**: `@(` — bash-синтаксис, падает до PowerShell («syntax error near unexpected token (`)). Из Hermes/bash передавать `-Args` словами (`-Args '-Work' 'путь'`) или проектировать elevated-скрипты с параметрами по умолчанию без `-Args` (реальный кейс в тестовом прогоне, см. U5).
+- **`run-elevated.ps1 -Args` из git-bash**: `@(...)` — PowerShell, в bash падает («syntax error near unexpected token (`)». И «словами раздельно» (`-Args '-Work' 'путь'`) из bash тоже НЕ работает: bash срезает кавычки, PS видит `-Work` как параметр → PositionalParameterNotFound (реальный кейс прогона 0.2.2). Надёжно из bash: (1) параметры elevated-скрипта со значениями по умолчанию, без `-Args` (U5); (2) `PC_ELEV_ARGS` — аргументы построчно (одна строка = один аргумент, без кавычек), из bash через `$'...'`: `PC_ELEV_ARGS=$'-Work\nD:\путь\n-Dism'`. Внутри PowerShell `-Args` работает как обычно.
 - **`return $null` внутри `ForEach-Object` (пайплайн) — НЕ завершает функцию**: эмитит $null в вывод (массив @($null, path)), из-за чего `if (-not $x)` и параметры ломаются. Собирай результат через `foreach`-цикл / `[ref]` и проверяй `[string]::IsNullOrEmpty`.
 - **Счётчики `$x +=` внутри функции — локальная копия** (скоуп): «ИТОГО» в логе может соврать в разы (реальный кейс: показано 0,86 ГБ при фактических ~2,7). Агрегируй через `$script:`/`[ref]`, либо возвращай объект; итог всегда сверяй с `Get-Volume`-дельтой.
 - **Таб только в двойных кавычках**: `'...`t...'` — это литеральные backtick+t, а НЕ таб (эскейп-последовательности в одиночных кавычках не работают). Все форматы `"{0}`t{1}"` — в двойных. (Реальный кейс: разделители в отчётах scan/Dupe превратились в `t и сломали сортировку-сплит.)
@@ -182,15 +182,15 @@ Desktop user+Public, Start Menu user+ProgramData; `.lnk` и `.url`. Скрипт
 
 - `scripts/cleanup-common.ps1` — общая библиотека: размеры, `Remove-Target`/`Remove-Contents` (статусы removed / already gone / LOCKED / BLOCKED; системные корни защищены `Test-ProtectedRoot`), `Get-ExePath`, лидгер, юнит-готовые помощники. Подключается `.`-source в phase-скрипты.
 - `scripts/phase0.ps1` — контекст (ОС/диски/права/TEMP) + baseline свободного места в `ledger.csv`.
-- `scripts/scan.ps1` — инвентаризация корня: карта топ-папок + топ-файлов + кандидаты дублей за ОДИН проход; исключения (рабочая папка/корзина/SVI), системные дубли в `dupes_system.txt`.
+- `scripts/scan.ps1` — инвентаризация корня: карта топ-папок + топ-файлов + кандидаты дублей за ОДИН проход; исключения (рабочая папка/корзина/SVI), системные дубли в `dupes_system.txt`. `-MinDupBytes` — строка с суффиксом (`'20MB'`,`'1.5GB'`; дефолт `50MB`). `-Tag 'c'` — суффикс имён файлов: несколько корней в одном прогоне не затирают друг друга (`dirs_top_c.txt`, `dupes_d.txt`).
 - `scripts/inventory-quick.ps1` — `installed.csv` (+ Hive/LocExists), установщики, корзины (`$R*`), кэши по профилям.
 - `scripts/elevated-cleanup.ps1` — системный elevated-батч (Windows\Temp, SoftwareDistribution, DeliveryOptimization, системные остатки, `-Extra`, DISM по флагу) + лидгер.
-- `scripts/run-elevated.ps1` — единый запуск elevated-скрипта: parse-check ДО UAC, предупреждение, `-Wait`, exit-код.
+- `scripts/run-elevated.ps1` — единый запуск elevated-скрипта: parse-check ДО UAC, предупреждение, `-Wait`, exit-код. Из git-bash аргументы — через дефолты elevated-скрипта или `PC_ELEV_ARGS` (см. Pitfalls); из PowerShell — обычный `-Args`.
 - `scripts/autostart.ps1` — полный отчёт автозапусков со статусами (live/broken/спец) по всем источникам.
 - `scripts/residue-check.ps1` — чек-лист остатков после антинсталла (процессы→службы→задачи→Run→ярлыки→папки→реестр).
 - `scripts/ledger-report.ps1` — свод Фазы 10 из `ledger.csv` (baseline, по фазам, дельта томов).
 - `scripts/unused-detect.ps1` — кандидаты «возможно не используется» → `unused_hints.txt` (Фаза 2; только кандидаты, решение за пользователем).
 - `scripts/steam-games.ps1` — ИНФОРМАЦИЯ о Steam-библиотеках → `steam_games.txt` (топ игр по размеру; удаление только через Steam; не кандидаты — блок «где место»).
-- `scripts/shortcuts.ps1` — поиск битых ярлыков (.lnk/.url) в 4 стандартных местах.
+- `scripts/shortcuts.ps1` — поиск битых ярлыков (.lnk/.url) в 4 стандартных местах. Параметр — `-Work` (совместим алиас `-OutDir`).
 - `scripts/pending-delete.ps1` — удаление заблокированных файлов при перезагрузке (PendingFileRenameOperations; elevated).
 - `scripts/observe.ps1` — диагностический журнал `observations.md` (append; включён по умолчанию, off через `PC_CLEANUP_DIAG=0`; на воркфлоу не влияет).

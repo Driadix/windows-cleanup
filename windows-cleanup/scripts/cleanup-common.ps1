@@ -21,6 +21,30 @@ function Get-SizeBytes([string]$Path) {
     return [long]$s
 }
 
+function ConvertTo-Bytes {
+    # Преобразует строку размера в байты [long]: '50MB' / '1.5 GB' / '50000000' / '123 KB'.
+    # Нужна, чтобы размерные параметры можно было передавать из командной строки с суффиксом:
+    # в PS 5.1 строка '50MB' НЕ конвертируется в [long] напрямую (ParameterArgumentTransformationError:
+    # 'Input string was not in a correct format'), хотя литерал 50MB в теле скрипта — валиден.
+    # Реальный кейс: scan.ps1 -MinDupBytes 50MB падал при вызове из командной строки.
+    param([string]$Size)
+    $s = ([string]$Size).Trim()
+    if (-not $s) { return 0L }
+    if ($s -match '^(\d+(?:[.,]\d+)?)\s*([KMGTP]?B?)$') {
+        $num = [double]($Matches[1] -replace ',', '.')
+        switch ($Matches[2].ToUpperInvariant()) {
+            'KB' { return [long]($num * 1KB) }
+            'MB' { return [long]($num * 1MB) }
+            'GB' { return [long]($num * 1GB) }
+            'TB' { return [long]($num * 1TB) }
+            'PB' { return [long]($num * 1PB) }
+            'B'  { return [long]$num }
+            default { return [long]$num }   # голое число без суффикса = байты
+        }
+    }
+    return 0L   # нераспознанный формат
+}
+
 function Format-Gb([long]$Bytes) {
     return '{0:N2}' -f ($Bytes / 1GB)
 }

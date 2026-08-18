@@ -2,26 +2,34 @@
 # ОДИН проход по дереву (одна рекурсия), в отличие от старой версии (3+ обхода).
 # Использование (из git-bash путь лучше с прямыми слэшами):
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File scan.ps1 -Root "C:/" -OutDir "D:\путь\рабочей папки"
-# Параметры: -Root -OutDir -Top (50) -MinDupBytes (50MB) -SkipSystemDupes -ExcludeRoots @(пути)
+# Параметры: -Root -OutDir -Top (50) -MinDupBytes (по умолчанию 50MB; с суффиксом: '20MB','1.5GB',
+#   или голые байты '50000000') -SkipSystemDupes -ExcludeRoots @(пути) -Tag ('c'/'d' и т.п.)
 # Выход: dirs_top.txt ("GB\tPath"), files_top.txt ("Length\tdate\tFullName"), dupes.txt ("Length\tFullName").
+#   -Tag: суффикс имён файлов — НЕ даёт второму скану (другой корень) затреть результаты первого
+#   (dirs_top_c.txt / dirs_top_d.txt и т.д.). Без -Tag имена классические (один корень за прогон).
 #   При пустом результате пишется маркер "(пусто — совпадений нет)" (файл всегда создаётся).
 #   Рабочая папка (OutDir), $Recycle.Bin, System Volume Information и -ExcludeRoots — исключаются из обхода.
 param(
     [Parameter(Mandatory=$true)][string]$Root,
     [Parameter(Mandatory=$true)][string]$OutDir,
     [int]$Top = 50,
-    [long]$MinDupBytes = 50MB,
+    [string]$MinDupBytes = '50MB',
     [switch]$SkipSystemDupes,
-    [string[]]$ExcludeRoots = @()
+    [string[]]$ExcludeRoots = @(),
+    [string]$Tag = ''
 )
 
 $ErrorActionPreference = 'Continue'
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $here 'cleanup-common.ps1')   # ConvertTo-Bytes и пр.
+$minDupLong = ConvertTo-Bytes -Size $MinDupBytes   # '50MB'/'1.5GB'/число -> байты (см. ConvertTo-Bytes)
+$suffix = if ($Tag) { '_' + ([string]$Tag).Trim().Trim('_') } else { '' }
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 if (-not (Test-Path -LiteralPath $OutDir)) { New-Item -ItemType Directory -Path $OutDir -Force | Out-Null }
-$dirTop  = Join-Path $OutDir 'dirs_top.txt'
-$fileTop = Join-Path $OutDir 'files_top.txt'
-$dupes   = Join-Path $OutDir 'dupes.txt'
-$dupesSys = Join-Path $OutDir 'dupes_system.txt'
+$dirTop  = Join-Path $OutDir ('dirs_top' + $suffix + '.txt')
+$fileTop = Join-Path $OutDir ('files_top' + $suffix + '.txt')
+$dupes   = Join-Path $OutDir ('dupes' + $suffix + '.txt')
+$dupesSys = Join-Path $OutDir ('dupes_system' + $suffix + '.txt')
 
 # --- нормализация корня (всегда завершающий обратный слэш: 'C:\' и 'C:/' -> 'C:\') ---
 $rootWin = $Root.Replace('/','\')
@@ -68,7 +76,7 @@ foreach ($file in (Get-ChildItem -LiteralPath $rootWin -Recurse -Force -File -Er
         $topFiles.Sort([System.Comparison[object[]]]{ param($a, $b) ([long]$b[0]).CompareTo([long]$a[0]) })
     }
     # кандидаты в дубли (только большие)
-    if ($len -gt $MinDupBytes) {
+    if ($len -gt $minDupLong) {
         $dk = [string]$len + '|' + $file.Name
         if ($dupeMap.ContainsKey($dk)) { $dupeMap[$dk].Add($file.FullName) } else { $dupeMap[$dk] = New-Object 'System.Collections.Generic.List[string]'; $dupeMap[$dk].Add($file.FullName) }
     }

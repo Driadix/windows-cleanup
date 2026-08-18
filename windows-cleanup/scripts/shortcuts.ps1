@@ -1,12 +1,15 @@
 # Параметры
 param(
-    [Parameter(Mandatory=$true)][string]$OutDir,
+    # -Work — путь рабочей папки (единообразно с остальными phase-скриптами). Алиас -OutDir
+    # оставлен для совместимости со старыми вызовами (оба имени работают).
+    [Parameter(Mandatory=$true)][Alias('OutDir')][string]$Work,
     [string[]]$Places,
     [switch]$Remove
 )
 
 # Поиск битых ярлыков в 4 стандартных местах (.lnk и .url); с -Places сканирует указанные каталоги.
-# Использование: powershell.exe -NoProfile -ExecutionPolicy Bypass -File shortcuts.ps1 -OutDir "<рабочая папка>"
+# Использование: powershell.exe -NoProfile -ExecutionPolicy Bypass -File shortcuts.ps1 -Work "<рабочая папка>"
+#   (совместимо: -OutDir "<рабочая папка>")
 # Без -Remove — только отчёт; с -Remove — удаляет битые (с логом). Живые никогда не трогаются.
 # Нюансы: .url — это INI ([InternetShortcut] URL=...); для веб-ссылки TargetPath пустой легитимно,
 # поэтому .url считается битой только при пустой/отсутствующей URL=. Отчёт пишем построчно без усечения путей.
@@ -58,12 +61,12 @@ foreach ($p in $places) {
         }
 }
 
-if (-not (Test-Path -LiteralPath $OutDir)) { New-Item -ItemType Directory -Path $OutDir -Force | Out-Null }
-$report = Join-Path $OutDir 'broken_shortcuts.txt'
+if (-not (Test-Path -LiteralPath $Work)) { New-Item -ItemType Directory -Path $Work -Force | Out-Null }
+$report = Join-Path $Work 'broken_shortcuts.txt'
 $broken | ForEach-Object { "$($_.Link)`t$($_.Target)" } | Set-Content -Path $report -Encoding UTF8
 
 if ($Remove) {
-    $log = Join-Path $OutDir 'broken_shortcuts_log.txt'
+    $log = Join-Path $Work 'broken_shortcuts_log.txt'
     foreach ($b in $broken) {
         try {
             Remove-Item -LiteralPath $b.Link -Force -Recurse
