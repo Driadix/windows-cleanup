@@ -26,6 +26,7 @@ $byPhase = $removed | Group-Object phase | ForEach-Object {
 } | Sort-Object Phase
 foreach ($p in $byPhase) { $lines += ('  {0}: {1:N1} МБ ({2:N2} ГБ)  ({3} записей)' -f $p.Phase, $p.MB, ($p.MB/1024), $p.N) }
 $totalMB = ($removed | Measure-Object -Property removed_mb -Sum).Sum
+if ($null -eq $totalMB) { $totalMB = 0 }   # syndrome: Measure-Object пустого набора возвращает $null, и {0:N1} печатает пустоту (0.2.2)
 $lines += ('  ИТОГО освобождено (по строкам ledger): {0:N1} МБ ({1:N2} ГБ)' -f $totalMB, ($totalMB/1024))
 
 $lines += ''

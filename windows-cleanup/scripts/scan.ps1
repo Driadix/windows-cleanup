@@ -102,11 +102,17 @@ $fileRows = $topFiles | ForEach-Object {
 if ($fileRows) { $fileRows | Set-Content -Path $fileTop -Encoding UTF8 } else { '(пусто — совпадений нет)' | Set-Content -Path $fileTop -Encoding UTF8 }
 
 # --- дубли: только группы Count>1 ---
-$sysPrefixesUpper = @(
-    (($rootWin + 'Windows\WinSxS\').ToUpperInvariant()),
-    (($rootWin + 'Windows\assembly\').ToUpperInvariant()),
-    (($rootWin + 'Windows\System32\DriverStore\').ToUpperInvariant()),
-    (($rootWin + 'Windows\System32\lxss\').ToUpperInvariant())
+# Системные маркеры — ПОДСТРОКИ пути (не префиксы от корня скана!): префикс от $rootWin работал бы
+# только при корне 'C:\', а на подкорне (напр. 'Program Files (x86)\Microsoft') собирался мусор — реальный кейс 0.2.3.
+# Нужен $u.Contains(marker) — сработает при любом корне.
+$sysMarkersUpper = @(
+    '\WINDOWS\WINSXS\',
+    '\WINDOWS\ASSEMBLY\',
+    '\WINDOWS\SYSTEM32\DRIVERSTORE\',
+    '\WINDOWS\SYSTEM32\LXSS\',
+    # Edge vs EdgeWebView делят бинарники по-design (случай 0.2.2: msedge.dll 342 МБ пара) — не кандидаты
+    '\MICROSOFT\EDGECORE\',
+    '\MICROSOFT\EDGEWEBVIEW\'
 )
 $userLines = New-Object 'System.Collections.Generic.List[string]'
 $sysLines  = New-Object 'System.Collections.Generic.List[string]'
@@ -116,7 +122,7 @@ foreach ($kv in $dupeMap.GetEnumerator()) {
         $sys = $false
         foreach ($f in $kv.Value) {
             $u = $f.ToUpperInvariant()
-            foreach ($sp in $sysPrefixesUpper) { if ($sp -and $u.StartsWith($sp)) { $sys = $true; break } }
+            foreach ($m in $sysMarkersUpper) { if ($u.Contains($m)) { $sys = $true; break } }
             if ($sys) { break }
         }
         foreach ($f in $kv.Value) {

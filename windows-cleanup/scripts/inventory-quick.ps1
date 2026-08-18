@@ -45,7 +45,10 @@ foreach ($h in $hives.Keys) {
         }
         $rows += [pscustomobject]@{
             Name = $name; Ver = $p.DisplayVersion; Hive = $hives[$h]; Loc = $dir; LocExists = $locExists; LocKind = $locKind
-            Uninst = $p.UninstallString; Code = $p.ProductCode; Date = $p.InstallDate; SizeMB = $p.EstimatedSize
+            Uninst = $p.UninstallString; Code = $p.ProductCode; Date = $p.InstallDate
+            # EstimatedSize в реестре — в КИЛОБАЙТАХ, а колонка называется SizeMB (реальный кейс: LoL
+            # показывал 39 492 190 «МБ» = 39 ТБ, тогда как это 37,7 ГБ). Делим на 1024, чтобы имя не врало.
+            SizeMB = if ($p.EstimatedSize) { [math]::Max(0, [long]([math]::Round([double]$p.EstimatedSize / 1024))) } else { $null }
         }
     }
 }
