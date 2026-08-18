@@ -48,7 +48,8 @@ Get-ItemProperty $paths -ErrorAction SilentlyContinue |
 ```
 
 - HKCU обязателен (per-user Squirrel), WOW6432Node обязателен (32-бит).
-- **Мёртвая запись** = InstallLocation/UninstallString → несуществующий путь → кандидат на удаление ключа.
+- Вывод — **`installed.csv`** (колонки Name/Ver/Hive/Loc/LocExists/Uninst/Code/Date/SizeMB) — делает `scripts/inventory-quick.ps1` (вместе с установщиками, корзинами, кэшами).
+- **«Мёртвая запись» = кандидат, а не факт**: `InstallLocation`/`UninstallString` → несуществующий путь. Осторожно: легитимные MSI (VC++ 2012/2013/v14, .NET Runtime) часто держат `InstallLocation` = `C:\ProgramData\Package Cache\{guid}`, который отсутствует при вычищенном кэше установщика — это НЕ сирота. Второй критерий сироты: папка отсутствует И нет живого компонента/антиинсталлера по `UninstallString` И приложения нет в задачах/службах. Решение всегда за пользователем.
 - Win11 — дополнительно `winget list`; UWP — `Get-AppxPackage`.
 - **Детекция неиспользуемых** (Фаза 10) дополнительно смотрит UserAssist/Prefetch/MuiCache — см. `final-options.md`.
 
@@ -62,6 +63,10 @@ Get-ItemProperty $paths -ErrorAction SilentlyContinue |
 
 Правило: никогда авто-удалять; только по списку с размером и датой; дубликат инсталлятора можно сократить до одной копии.
 
+**Внимательные точки вне пользовательских папок** (риск, не авто, уточнять у пользователя):
+- `C:\Program Files\Microsoft Office\Updates\Download` — кэш обновлений Office C2R (реально ~0,9 ГБ); удаление заставит Office скачать обновления заново, данных не теряет;
+- `C:\Windows\Installer\Razer Central` — кэш установщиков Razer (~0,3 ГБ); осторожно (файлы нужны для ремонта Razer, но пересоздаются при переустановке).
+
 ## Дубликаты (только кандидаты!)
 
 ```powershell
@@ -72,8 +77,16 @@ Get-ChildItem -LiteralPath $root -Recurse -Force -File -ErrorAction SilentlyCont
   ForEach-Object { $_.Group | Select Length,FullName } | Out-File "$work\dupes.txt" -Encoding UTF8
 ```
 
+- Файл всегда писать (при пустом результате — маркер `(пусто)`).
+- **Системные пути** (WinSxS / `Windows\assembly` (NGEN) / DriverStore / lxss / Edge vs WebView2) — by-design «дубли», выносить в `dupes_system.txt`, не пугать пользователя.
+- Итог — **кандидаты**: подтверждение реальности только хешем (SHA-256) по парам из дублей.
+
 ## Корзины (по выбранным дискам)
 
-```powershell
-Clear-RecycleBin -DriveLetter C -Force    # перед этим показать размер: Get-Volume или (New-Object -ComObject Shell.Application)
-```
+Считать только реальные данные: файлы **`$R*`** в `X:\$Recycle.Bin` (метаданные `$I*` — не считаем). Делает `scripts/inventory-quick.ps1`. Перед очисткой показать размер; очистка — `Clear-RecycleBin -DriveLetter X -Force` для выбранных дисков.
+
+## Прочее для инвентаря
+
+- **Тени (только для внимания)**: `vssadmin list shadowstorage` требует админ — замер в elevated-проходе Фазы 4, а не в Фазу 2 пользовательской сессии; на практике 10%+ диска возможны при лимите UNBOUNDED (в прогоне C: было 16 ГБ).
+- **Кэши npm**: проверять ОБА места — `%LOCALAPPDATA%\npm-cache` (актуальный) и `%APPDATA%\npm-cache` (остаток старых версий npm, бывает сотни МБ).
+- **Сканы-карты**: `scripts/scan.ps1` — один проход по дереву; корни брать без пересечений (профиль один раз, а не C:\Users + AppData отдельно), рабочая папка исключена.
