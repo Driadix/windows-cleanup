@@ -1,4 +1,4 @@
-# Параметры
+﻿# Параметры
 param(
     [Parameter(Mandatory=$true, ValueFromRemainingArguments=$true)][string[]]$Paths
 )

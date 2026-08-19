@@ -6,7 +6,9 @@ Checks:
   2. Required fields present: name, description, version, author, license, platforms.
   3. description rules: <= 60 chars, ends with '.', platforms includes 'windows'.
   4. Every references/*.md and scripts/*.ps1 mentioned in the SKILL.md body exists.
-  5. Every scripts/*.ps1 parses (delegates to PowerShell Parser::ParseFile, if PowerShell is available).
+  5. Every scripts/*.ps1 is UTF-8 **with BOM** (PS 5.1 reads BOM-less .ps1 as ANSI/cp1251 on
+     non-UTF8 locales — Cyrillic string literals break parsing; real case from a 2026-08-19 run).
+  6. Every scripts/*.ps1 parses (delegates to PowerShell Parser::ParseFile, if PowerShell is available).
 
 Usage:
   python tools/validate.py [path-to-skill-dir]     (default: <repo>/windows-cleanup)
@@ -104,8 +106,16 @@ def main() -> int:
                 errors.append(f"body references missing script: {s}")
         print("  referenced files/scripts: all present" if not errors or all("missing file" not in e and "missing script" not in e for e in errors) else "")
 
-    # PS syntax check on every shipped script
+    # BOM check on every shipped script (PS 5.1 needs UTF-8 BOM for Cyrillic source files)
     scripts = sorted((skill_dir / "scripts").glob("*.ps1")) if (skill_dir / "scripts").exists() else []
+    for s in scripts:
+        head = s.read_bytes()[:3]
+        if head != b"\xef\xbb\xbf":
+            errors.append(f"{s.name}: no UTF-8 BOM (EF BB BF) — PS 5.1 will misread it as ANSI (cp1251 on ru-RU) and Cyrillic breaks parsing")
+        else:
+            print(f"  bom {s.name}: OK")
+
+    # PS syntax check on every shipped script
     for s in scripts:
         ok, note = check_ps_syntax(s)
         print(f"  ps-syntax {s.name}: {note}")

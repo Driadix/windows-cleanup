@@ -1,4 +1,4 @@
-# phase0.ps1 — контекст и baseline учёта (Фаза 0).
+﻿# phase0.ps1 — контекст и baseline учёта (Фаза 0).
 # Использование: powershell.exe -NoProfile -ExecutionPolicy Bypass -File phase0.ps1 -Work "D:\путь\рабочей папки"
 # или без -Work (создаст Documents\PC-Cleanup\<дата>).
 # Пишет: phase0_context.txt + baseline в ledger.csv (для честной дельты в Фазе 10).
@@ -22,6 +22,22 @@ $lines += ('PS: ' + $PSVersionTable.PSVersion.ToString())
 $lines += ('Пользователь: ' + $(whoami) + ' | Профиль: ' + $env:USERPROFILE)
 $lines += ('TEMP: ' + $env:TEMP)
 $lines += ('Elevated: ' + (Test-Elevated))
+# Ранняя диагностика UAC-FAIL: неинтерактивная сессия + не-админ — UAC-подъём через Start-Process -Verb RunAs
+# часто МОЛЧА не повышает (процесс остаётся Medium integrity, даже при подтверждённом UAC-промпте).
+# Реальный кейс прогона 2026-08-19. Если флаги совпали — предупредим и запишем в observations.
+$isInteractive = [Environment]::UserInteractive
+if (-not (Test-Elevated) -and -not $isInteractive) {
+    $lines += 'UAC-RISK: неинтерактивная сессия + не-админ — Start-Process -Verb RunAs может НЕ повысить права'
+    $lines += '  (процесс останется Medium integrity). Если elevated-проход не сработает: перезапусти агента от'
+    $lines += '  имени администратора или выполни elevated-команду вручную из админ-консоли (см. run-elevated.ps1).'
+    # observe.ps1 использует exit в теле — dot-source его нельзя (exit убьёт и нас), запускаем дочерним процессом
+    try {
+        $obs = Join-Path $here 'observe.ps1'
+        if (Test-Path -LiteralPath $obs) {
+            Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File','"' + $obs + '"','-Work','"' + $Work + '"','-Level','warn','-Phase','0','-Msg','UAC-RISK: неинтерактивная сессия, не-админ — возможен молчаливый отказ Start-Process -Verb RunAs (кейс 2026-08-19)') -Wait -WindowStyle Hidden
+        }
+    } catch {}
+}
 $lines += '--- Диски (Volumes) ---'
 $vols = @(Get-Volume | Where-Object DriveLetter)
 foreach ($v in $vols) {

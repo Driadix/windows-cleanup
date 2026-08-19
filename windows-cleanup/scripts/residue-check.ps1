@@ -1,4 +1,4 @@
-# residue-check.ps1 — чек-лист остатков ПОСЛЕ антинсталла (read-only, ничего не удаляет).
+﻿# residue-check.ps1 — чек-лист остатков ПОСЛЕ антинсталла (read-only, ничего не удаляет).
 # Проверяет по каждому приложению: процессы, службы, задачи, Run-ключи, Start-меню, папки, реестр-Uninstall.
 # Использование:
 #   residue-check.ps1 -Work "рабочая папка" -AppName "Driver Booster 13","Revo Uninstaller"

@@ -1,4 +1,4 @@
-# autostart.ps1 — полный отчёт по автозапускам (Фаза 7): Run/RunOnce, Startup, задачи, службы Auto, Winlogon.
+﻿# autostart.ps1 — полный отчёт по автозапускам (Фаза 7): Run/RunOnce, Startup, задачи, службы Auto, Winlogon.
 # По каждой записи — цель (исполняемый файл) и статус LIVE / BROKEN / (спец.).
 # Выход: -Work\autostart.txt + сводка в консоль. Только отчёт (ничего не удаляет).
 # Использование: powershell.exe -NoProfile -ExecutionPolicy Bypass -File autostart.ps1 -Work "рабочая папка"

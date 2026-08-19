@@ -1,4 +1,4 @@
-# cleanup-common.ps1 — общая библиотека для phase-скриптов windows-cleanup
+﻿# cleanup-common.ps1 — общая библиотека для phase-скриптов windows-cleanup
 # Подключается через  . "$env:USERPROFILE\AppData\Local\hermes\skills\...\scripts\cleanup-common.ps1"  (или путём из репо).
 # Правила:
 #   * Никаких функций с именами ключевых слов PS (Do/ForEach/...).

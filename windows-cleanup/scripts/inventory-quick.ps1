@@ -1,4 +1,4 @@
-# inventory-quick.ps1 — быстрая часть Фазы 2: программы (CSV), установщики, корзины, кэши.
+﻿# inventory-quick.ps1 — быстрая часть Фазы 2: программы (CSV), установщики, корзины, кэши.
 # Использование: powershell.exe -NoProfile -ExecutionPolicy Bypass -File inventory-quick.ps1 -Work "рабочая папка" [-Disks 'C'] [-Disks 'C','D']
 #   -Disks: буквы выбранных в Фазе 1 дисков (например 'C'). Кэши на других томах (например %TEMP% на D:)
 #           помечаются в cache_sizes.txt как «вне выбранных дисков» — по умолчанию в очистку не идут (U2).

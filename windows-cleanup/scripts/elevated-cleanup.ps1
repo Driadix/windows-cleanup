@@ -1,4 +1,4 @@
-# elevated-cleanup.ps1 — системный ELEVATED-проход (запускать через run-elevated.ps1 или Start-Process -Verb RunAs).
+﻿# elevated-cleanup.ps1 — системный ELEVATED-проход (запускать через run-elevated.ps1 или Start-Process -Verb RunAs).
 # Чистит: Windows\Temp, SoftwareDistribution (Download+DataStore), DeliveryOptimization,
 #          $WINDOWS.~BT / $GetCurrent / $WinREAgent, ретраит -Extra (LOCKED из user-прохода), DISM (флаг -Dism).
 # Требует администратора. Логи/лидгер пишет в -Work.
@@ -15,6 +15,11 @@ $ErrorActionPreference = 'Continue'
 if (-not (Test-Path -LiteralPath $Work)) { New-Item -ItemType Directory -Path $Work -Force | Out-Null }
 $log = Join-Path $Work 'elevated_cleanup.log'
 if (Test-Path -LiteralPath $log) { Remove-Item -LiteralPath $log -Force }
+# Первая строка лога — фактический уровень прав ПРОЦЕССА (в сессиях агентов UAC-подъём может молча не
+# сработать: процесс остаётся Medium integrity даже после подтверждения — реальный кейс 2026-08-19).
+# run-elevated.ps1 читает эту строку после -Wait и, если False, честно сообщает, что elevated-проход
+# НЕ выполнялся, и советует перезапустить агента от админа (см. run-elevated.ps1).
+Add-Content -Path $log -Value ("elevated: " + (Test-Elevated)) -Encoding UTF8
 $ledger = Init-Ledger -Work $Work
 $script:totalMB = 0.0
 

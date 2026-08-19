@@ -1,6 +1,7 @@
 # Локальные логи и временное
 pc-cleanup-logs/
 **/pc-cleanup-logs/
+2026-08-19/
 *.log
 *.tmp
 

@@ -1,4 +1,4 @@
-# ledger-report.ps1 — свод по ledger.csv для Фазы 10 (без ручного сложения).
+﻿# ledger-report.ps1 — свод по ledger.csv для Фазы 10 (без ручного сложения).
 # Печатает: baseline свободного места (по томам), сумму освобождённого по фазам, дельту Get-Volume сейчас vs baseline.
 # Использование: powershell.exe -NoProfile -ExecutionPolicy Bypass -File ledger-report.ps1 -Work "рабочая папка" [-Ledger ledger.csv]
 param(
