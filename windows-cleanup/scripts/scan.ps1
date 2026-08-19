@@ -79,44 +79,48 @@ function Invoke-FastWalk {
         # а не при вызове; иначе первая же закрытая папка валит весь скан (аналог -EA SilentlyContinue).
         try { $subdirs = @([System.IO.Directory]::EnumerateDirectories($dir)) } catch { $subdirs = @() }
         foreach ($d in $subdirs) {
-            try { $dInfo = New-Object System.IO.DirectoryInfo($d) } catch { continue }
-            if ($dInfo.Attributes -band $FileAttr) { continue }
-            if (Is-Excluded ($d + '\')) { continue }
-            $stack.Push($d)
+            try {
+                $dInfo = New-Object System.IO.DirectoryInfo($d)
+                if ($dInfo.Attributes -band $FileAttr) { continue }
+                if (Is-Excluded ($d + '\')) { continue }
+                $stack.Push($d)
+            } catch { continue }   # битая/недоступная папка — пропускаем, а не валим скан
         }
         # файлы папки
         try { $files = @([System.IO.Directory]::EnumerateFiles($dir)) } catch { $files = @() }
         foreach ($full in $files) {
-            try { $file = New-Object System.IO.FileInfo($full) } catch { continue }
-            if ($file.Attributes -band $FileAttr) { continue }
-            if (Is-Excluded $file.FullName) { continue }
-            $len = [long]$file.Length
-            $nFiles++
-            # топ-уровневый сегмент (папка 1-го уровня от корня)
-            $rel = $file.FullName.Substring($rootLen)
-            $idx = $rel.IndexOf('\')
-            if ($idx -ge 0) { $seg = $rel.Substring(0, $idx); $key = $rootWin + $seg + '\' } else { $key = $rootWin }
-            if ($dirSizes.ContainsKey($key)) { $dirSizes[$key] += $len } else { $dirSizes[$key] = $len }
-            # топ-файлы (инкрементальный top-N, без полной коллекции)
-            if ($topFiles.Count -lt $Top) {
-                $topFiles.Add([object[]]@($len, $file.LastWriteTime, $file.FullName))
-                if ($topFiles.Count -eq $Top) {
+            try {
+                $file = New-Object System.IO.FileInfo($full)
+                if ($file.Attributes -band $FileAttr) { continue }
+                if (Is-Excluded $file.FullName) { continue }
+                $len = [long]$file.Length
+                $nFiles++
+                # топ-уровневый сегмент (папка 1-го уровня от корня)
+                $rel = $file.FullName.Substring($rootLen)
+                $idx = $rel.IndexOf('\')
+                if ($idx -ge 0) { $seg = $rel.Substring(0, $idx); $key = $rootWin + $seg + '\' } else { $key = $rootWin }
+                if ($dirSizes.ContainsKey($key)) { $dirSizes[$key] += $len } else { $dirSizes[$key] = $len }
+                # топ-файлы (инкрементальный top-N, без полной коллекции)
+                if ($topFiles.Count -lt $Top) {
+                    $topFiles.Add([object[]]@($len, $file.LastWriteTime, $file.FullName))
+                    if ($topFiles.Count -eq $Top) {
+                        $topFiles.Sort([System.Comparison[object[]]]{ param($a, $b) ([long]$b[0]).CompareTo([long]$a[0]) })
+                    }
+                } elseif ($len -gt [long]$topFiles[$topFiles.Count - 1][0]) {
+                    $topFiles[$topFiles.Count - 1] = [object[]]@($len, $file.LastWriteTime, $file.FullName)
                     $topFiles.Sort([System.Comparison[object[]]]{ param($a, $b) ([long]$b[0]).CompareTo([long]$a[0]) })
                 }
-            } elseif ($len -gt [long]$topFiles[$topFiles.Count - 1][0]) {
-                $topFiles[$topFiles.Count - 1] = [object[]]@($len, $file.LastWriteTime, $file.FullName)
-                $topFiles.Sort([System.Comparison[object[]]]{ param($a, $b) ([long]$b[0]).CompareTo([long]$a[0]) })
-            }
-            # кандидаты в дубли (только большие)
-            if ($len -gt $minDupLong) {
-                $dk = [string]$len + '|' + $file.Name
-                if ($dupeMap.ContainsKey($dk)) { $dupeMap[$dk].Add($file.FullName) } else { $dupeMap[$dk] = New-Object 'System.Collections.Generic.List[string]'; $dupeMap[$dk].Add($file.FullName) }
-            }
-            # пульс прогресса: каждые ProgressEvery файлов
-            if ($ProgressFile -and ($nFiles - $lastPrint -ge $ProgressEvery)) {
-                ("{0}`t{1}`t{2}" -f [math]::Round($sw.Elapsed.TotalSeconds,1), $nFiles, $dir) | Add-Content -Path $ProgressFile -Encoding UTF8
-                $lastPrint = $nFiles
-            }
+                # кандидаты в дубли (только большие)
+                if ($len -gt $minDupLong) {
+                    $dk = [string]$len + '|' + $file.Name
+                    if ($dupeMap.ContainsKey($dk)) { $dupeMap[$dk].Add($file.FullName) } else { $dupeMap[$dk] = New-Object 'System.Collections.Generic.List[string]'; $dupeMap[$dk].Add($file.FullName) }
+                }
+                # пульс прогресса: каждые ProgressEvery файлов
+                if ($ProgressFile -and ($nFiles - $lastPrint -ge $ProgressEvery)) {
+                    ("{0}`t{1}`t{2}" -f [math]::Round($sw.Elapsed.TotalSeconds,1), $nFiles, $dir) | Add-Content -Path $ProgressFile -Encoding UTF8
+                    $lastPrint = $nFiles
+                }
+            } catch { continue }   # битый/недоступный файл — пропускаем, а не валим весь скан
         }
     }
     if ($ProgressFile) { ("DONE`t{0}`t{1}" -f [math]::Round($sw.Elapsed.TotalSeconds,1), $nFiles) | Add-Content -Path $ProgressFile -Encoding UTF8 }
