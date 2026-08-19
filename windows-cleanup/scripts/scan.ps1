@@ -4,10 +4,16 @@
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File scan.ps1 -Root "C:/" -OutDir "D:\путь\рабочей папки"
 # Параметры: -Root -OutDir -Top (50) -MinDupBytes (по умолчанию 50MB; с суффиксом: '20MB','1.5GB',
 #   или голые байты '50000000') -SkipSystemDupes -ExcludeRoots @(пути) -Tag ('c'/'d' и т.п.)
-#   -FastEnum: тот же single-pass через .NET (явный стек, без Get-ChildItem -Recurse) — в разы быстрее
-#     на больших корнях/слабых машинах; выходы идентичны классическому пути.
-#   -ProgressFile <файл>: пульс для поллинга агентом (elapsed_s, папки, файлы; строка DONE в конце) —
-#     позволяет показывать «скан идёт N мин, M файлов» вместо мёртвого ожидания (кейс 2026-08-19: 22 мин).
+#   -ProgressFile <файл>: маркеры start/DONE для поллинга агентом фонового скана (см. ниже).
+# Про обход: ЕДИНСТВЕННЫЙ проход — классический Get-ChildItem -Recurse -Force. .NET-вариант
+#   ([System.IO.Directory]::EnumerateFiles со стеком) пробовали в 0.2.4 и УБРАЛИ: замеры на живом
+#   диске не показали выигрыша (полный C: 287 с classic vs 296 с .NET; C:\Windows 126 с vs 180 с —
+#   classic быстрее). Причина: узкое место не в способе перечисления, а в самом обходе NTFS-дерева
+#   через Win32 API; единственный реальный путь к скорости — чтение MFT напрямую (как WizTree/
+#   Everything/SpaceSniffer), а это нативный код + админ, вне PowerShell. Классика проще и надёжнее.
+# -ProgressFile: пишем "# start" перед обходом и "DONE\t<сек>" после — агент поллит файл и по DONE
+#   понимает, что скан завершён (показывая «скан идёт...» вместо тишины). Пофайловый прогресс в
+#   классике недоступен (Get-ChildItem -Recurse — единый вызов), но маркер start/DONE уже даёт UX.
 # Выход: dirs_top.txt ("GB\tPath"), files_top.txt ("Length\tdate\tFullName"), dupes.txt ("Length\tFullName").
 #   + scan_meta.txt (JSON в одну строку: root/tag/время/сек_длительность/флаги) — кэш результата для агента:
 #     можно не пересканировать диск при повторном показе отчёта.
@@ -23,9 +29,7 @@ param(
     [switch]$SkipSystemDupes,
     [string[]]$ExcludeRoots = @(),
     [string]$Tag = '',
-    [switch]$FastEnum,
-    [string]$ProgressFile = '',
-    [int]$ProgressEvery = 5000
+    [string]$ProgressFile = ''
 )
 
 $ErrorActionPreference = 'Continue'
@@ -59,87 +63,23 @@ function Is-Excluded([string]$FullPath) {
     return $false
 }
 
-# --- -FastEnum: тот же единственный проход, но через [System.IO.Directory] (явный стек, без
-# Get-ChildItem -Recurse — на PS 5.1 он создаёт объект на каждый файл и на больших корнях в разы
-# медленнее; реальный кейс: скан C: занял 22,6 мин). Стек вместо рекурсии — не упадёт на глубоких
-# деревьях (node_modules/WinSxS). Каждая папка: не-доступ -> пропуск (как -ErrorAction SilentlyContinue).
-# Аналоги исключений/reparse/накопления идентичны классическому foreach ниже.
-function Invoke-FastWalk {
-    $FileAttr = [IO.FileAttributes]::ReparsePoint
-    $stack = New-Object 'System.Collections.Generic.Stack[string]'
-    $stack.Push($rootWin)
-    $nFiles = 0
-    $lastPrint = 0
-    if ($ProgressFile -and (Test-Path -LiteralPath $ProgressFile)) { Remove-Item -LiteralPath $ProgressFile -Force }
-    if ($ProgressFile) { ("# scan progress`tstart " + (Get-Date -Format 'HH:mm:ss')) | Add-Content -Path $ProgressFile -Encoding UTF8 }
-    while ($stack.Count -gt 0) {
-        $dir = $stack.Pop()
-        # подпапки — в стек (пересечение reparse-точек не проходим: это защита от циклов)
-        # Материализуем ВНУТРИ try: Enumerate* ленивые — ошибка доступа всплывает при foreach,
-        # а не при вызове; иначе первая же закрытая папка валит весь скан (аналог -EA SilentlyContinue).
-        try { $subdirs = @([System.IO.Directory]::EnumerateDirectories($dir)) } catch { $subdirs = @() }
-        foreach ($d in $subdirs) {
-            try {
-                $dInfo = New-Object System.IO.DirectoryInfo($d)
-                if ($dInfo.Attributes -band $FileAttr) { continue }
-                if (Is-Excluded ($d + '\')) { continue }
-                $stack.Push($d)
-            } catch { continue }   # битая/недоступная папка — пропускаем, а не валим скан
-        }
-        # файлы папки
-        try { $files = @([System.IO.Directory]::EnumerateFiles($dir)) } catch { $files = @() }
-        foreach ($full in $files) {
-            try {
-                $file = New-Object System.IO.FileInfo($full)
-                if ($file.Attributes -band $FileAttr) { continue }
-                if (Is-Excluded $file.FullName) { continue }
-                $len = [long]$file.Length
-                $nFiles++
-                # топ-уровневый сегмент (папка 1-го уровня от корня)
-                $rel = $file.FullName.Substring($rootLen)
-                $idx = $rel.IndexOf('\')
-                if ($idx -ge 0) { $seg = $rel.Substring(0, $idx); $key = $rootWin + $seg + '\' } else { $key = $rootWin }
-                if ($dirSizes.ContainsKey($key)) { $dirSizes[$key] += $len } else { $dirSizes[$key] = $len }
-                # топ-файлы (инкрементальный top-N, без полной коллекции)
-                if ($topFiles.Count -lt $Top) {
-                    $topFiles.Add([object[]]@($len, $file.LastWriteTime, $file.FullName))
-                    if ($topFiles.Count -eq $Top) {
-                        $topFiles.Sort([System.Comparison[object[]]]{ param($a, $b) ([long]$b[0]).CompareTo([long]$a[0]) })
-                    }
-                } elseif ($len -gt [long]$topFiles[$topFiles.Count - 1][0]) {
-                    $topFiles[$topFiles.Count - 1] = [object[]]@($len, $file.LastWriteTime, $file.FullName)
-                    $topFiles.Sort([System.Comparison[object[]]]{ param($a, $b) ([long]$b[0]).CompareTo([long]$a[0]) })
-                }
-                # кандидаты в дубли (только большие)
-                if ($len -gt $minDupLong) {
-                    $dk = [string]$len + '|' + $file.Name
-                    if ($dupeMap.ContainsKey($dk)) { $dupeMap[$dk].Add($file.FullName) } else { $dupeMap[$dk] = New-Object 'System.Collections.Generic.List[string]'; $dupeMap[$dk].Add($file.FullName) }
-                }
-                # пульс прогресса: каждые ProgressEvery файлов
-                if ($ProgressFile -and ($nFiles - $lastPrint -ge $ProgressEvery)) {
-                    ("{0}`t{1}`t{2}" -f [math]::Round($sw.Elapsed.TotalSeconds,1), $nFiles, $dir) | Add-Content -Path $ProgressFile -Encoding UTF8
-                    $lastPrint = $nFiles
-                }
-            } catch { continue }   # битый/недоступный файл — пропускаем, а не валим весь скан
-        }
-    }
-    if ($ProgressFile) { ("DONE`t{0}`t{1}" -f [math]::Round($sw.Elapsed.TotalSeconds,1), $nFiles) | Add-Content -Path $ProgressFile -Encoding UTF8 }
-}
-
 # --- аккумуляторы ---
 $dirSizes = @{}                                  # segment-key -> bytes (только топ-уровень внутри Root)
 $topFiles = New-Object 'System.Collections.Generic.List[object[]]'   # топ-N крупнейших (без сортировки сотен тысяч)
 $dupeMap  = @{}                                  # "length|name" -> List[string] (только > MinDupBytes)
 
-# --- обход: -FastEnum -> .NET-стек; иначе классический Get-ChildItem -Recurse (идентичные выходы) ---
+# --- обход: единственный проход Get-ChildItem -Recurse (классика; .NET-вариант убран — см. шапку) ---
 $FileAttr = [IO.FileAttributes]::ReparsePoint
-if ($FastEnum) {
-    Invoke-FastWalk
-} else {
+if ($ProgressFile) {
+    if (Test-Path -LiteralPath $ProgressFile) { Remove-Item -LiteralPath $ProgressFile -Force }
+    ("# scan progress`tstart " + (Get-Date -Format 'HH:mm:ss')) | Add-Content -Path $ProgressFile -Encoding UTF8
+}
+$nFiles = 0
 foreach ($file in (Get-ChildItem -LiteralPath $rootWin -Recurse -Force -File -ErrorAction SilentlyContinue)) {
     if ($file.Attributes -band $FileAttr) { continue }
     if (Is-Excluded $file.FullName) { continue }
     $len = [long]$file.Length
+    $nFiles++
     # топ-уровневый сегмент (папка 1-го уровня от корня)
     $rel = $file.FullName.Substring($rootLen)
     $idx = $rel.IndexOf('\')
@@ -161,7 +101,7 @@ foreach ($file in (Get-ChildItem -LiteralPath $rootWin -Recurse -Force -File -Er
         if ($dupeMap.ContainsKey($dk)) { $dupeMap[$dk].Add($file.FullName) } else { $dupeMap[$dk] = New-Object 'System.Collections.Generic.List[string]'; $dupeMap[$dk].Add($file.FullName) }
     }
 }
-}   # конец else (классический -Recurse путь)
+if ($ProgressFile) { ("DONE`t{0}`t{1}" -f [math]::Round($sw.Elapsed.TotalSeconds,1), $nFiles) | Add-Content -Path $ProgressFile -Encoding UTF8 }
 
 # --- карта папок: добавить пустые дочерние, чтобы они не пропадали (0 ГБ) ---
 foreach ($d in (Get-ChildItem -LiteralPath $rootWin -Directory -Force -ErrorAction SilentlyContinue)) {
@@ -234,9 +174,9 @@ $metaJson = @{
     tag           = $Tag
     started       = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
     duration_s    = [math]::Round($sw.Elapsed.TotalSeconds,1)
-    fast_enum     = [bool]$FastEnum
     min_dup_bytes = $minDupLong
     top_files     = $Top
+    files         = $nFiles
 }
 $metaJson | ConvertTo-Json -Compress | Set-Content -Path $meta -Encoding UTF8
 
