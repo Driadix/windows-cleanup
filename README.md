@@ -2,7 +2,7 @@
 
 Полуавтоматическая очистка Windows 10/11 через ИИ-агента: инвентаризация, мусор и кэши, удаление программ по выбору, сироты и автозапуски, битые ярлыки. Каждое необратимое действие — через **ворота явного согласия** пользователя.
 
-> **Версия:** 0.2.4 · **Лицензия:** MIT · **Платформа:** Windows (только)
+> **Версия:** 0.3.0 · **Лицензия:** MIT · **Платформа:** Windows 10/11
 
 ## Что это
 
@@ -59,15 +59,17 @@ disk-cleanup/
 ### Человеку (вручную)
 
 1. **Скачай репозиторий**: зелёная кнопка **Code → Download ZIP** (или `git clone https://github.com/Driadix/windows-cleanup.git`).
-2. **Найди папку скиллов своего агента.** Обычно это:
-   - Hermes: `%LOCALAPPDATA%\hermes\skills\` (например `C:\Users\Имя\AppData\Local\hermes\skills\`)
-   - Claude Code / Codex и другие: `~\.claude\skills\`, `~\.codex\skills\` — точный путь подскажет сам агент.
-3. **Скопируй папку `windows-cleanup` целиком** в категорию `maintenance`:
+2. **Узнай у своего агента путь к каталогу скиллов** — он разный и зависит от агента, не хардкодь его. Примеры (проверь у своего агента):
+   - Hermes: `%LOCALAPPDATA%\hermes\skills\`
+   - Claude Code: `~\.claude\skills\`
+   - Codex: `~\.codex\skills\`
+   - opencode: `~\.config\opencode\skills\`
+3. **Скопируй папку `windows-cleanup` целиком** в каталог скиллов (при желании — в подкатегорию, например `maintenance`):
    ```
-   %LOCALAPPDATA%\hermes\skills\maintenance\windows-cleanup\
+   <каталог_скиллов>\maintenance\windows-cleanup\
    ```
-   Категорию создай, если её нет.
-4. **Проверь**: в Hermes — `hermes skills list` (должен появиться `windows-cleanup`), для загрузки инструкции в чат попроси агента «почисти комп».
+   Подкатегорию создай, если её нет. Скилл не привязан к имени категории: пути он резолвит от `$PSScriptRoot`.
+4. **Проверь**: в Hermes — `hermes skills list` (должен появиться `windows-cleanup`); в остальных — попроси агента «почисти комп».
 
 Опциональная проверка целостности: `python tools/validate.py` — прогонит статическую валидацию скилла.
 
@@ -79,18 +81,19 @@ disk-cleanup/
 
 > Установи скилл `windows-cleanup` из репозитория https://github.com/Driadix/windows-cleanup. Собери папку `windows-cleanup` (SKILL.md + scripts/ + references/) целиком в свой каталог скиллов и подтверди установку списком загруженных файлов.
 
-Для Hermes-агентов можно явно:
+Пример для Hermes (в других агентах замени путь на свой каталог скиллов):
 
 ```
-hermes skills tap add Driadix/windows-cleanup
-git clone --depth 1 https://github.com/Driadix/windows-cleanup.git "$LOCALAPPDATA/Temp/disk-cleanup"
-cp -r <клон>/windows-cleanup "$LOCALAPPDATA/hermes/skills/maintenance/windows-cleanup"
-hermes skills list | grep windows-cleanup    # проверка
+SKILLS_DIR="$LOCALAPPDATA/hermes/skills"        # <- каталог скиллов ТВОЕГО агента
+git clone --depth 1 https://github.com/Driadix/windows-cleanup.git "$TEMP/disk-cleanup"
+mkdir -p "$SKILLS_DIR/maintenance"
+cp -r "$TEMP/disk-cleanup/windows-cleanup" "$SKILLS_DIR/maintenance/windows-cleanup"
+hermes skills list | grep windows-cleanup       # проверка
 ```
 
 (Альтернатива — `hermes skills install https://github.com/Driadix/windows-cleanup`, но этот способ может не установить файлы, явно не упомянутые в SKILL.md; полное копирование надёжнее — скилл остаётся редактируемым).
 
-После установки напиши агенту: **«почисти комп»** или **«освободи место»** — он подхватит скилл и проведёт по фазам, останавливаясь перед каждым удалением.
+После установки напиши агенту: **«почисти комп»** или **«освободи место»** — он подхватит скилл и проведёт по фазам, останавливаясь перед каждым удалением. Скилл не зависит от конкретного агента, буквы системного диска, имени профиля или языка системы (пути — из `$env:*`/`$PSScriptRoot`, проверка прав — по `WindowsBuiltInRole`, а не по локализованному имени группы).
 
 ## Ограничения и исключения
 

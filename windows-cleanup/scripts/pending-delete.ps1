@@ -4,26 +4,49 @@ param(
 )
 
 # Удаление заблокированных файлов/папок ПРИ ПЕРЕЗАГРУЗКЕ через PendingFileRenameOperations.
-# Использование (elevated): powershell.exe -NoProfile -ExecutionPolicy Bypass -File pending-delete.ps1 "C:\Program Files (x86)\EaseUS" "C:\path\file.dat"
+# Использование (elevated): powershell.exe -NoProfile -ExecutionPolicy Bypass -File pending-delete.ps1 "<путь к папке>" "<путь к файлу>"
 # Требует прав администратора (через Start-Process -Verb RunAs -Wait из скилла).
 # Запускать ТОЛЬКО как финал LOCKED-процедуры (ретрай → Stop-Process → это).
+
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $here 'cleanup-common.ps1')   # Test-Elevated / Test-ProtectedRoot
 
 $ErrorActionPreference = 'Stop'
 $key = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager'
 
-# Проверка прав
-$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole('Administrators')
-if (-not $isAdmin) { Write-Error 'Требуются права администратора'; exit 1 }
+# Проверка прав (BuiltInRole-enum: локаленезависимо, строка 'Administrators' на не-en сборках врёт)
+if (-not (Test-Elevated)) { Write-Error 'Требуются права администратора'; exit 1 }
 
 # PendingFileRenameOperations: пары "путь\??\..." + "" (пусто = удалить). REG_MULTI_SZ (7).
 $existing = (Get-ItemProperty -Path $key -Name PendingFileRenameOperations -ErrorAction SilentlyContinue).PendingFileRenameOperations
 $list = [System.Collections.Generic.List[string]]::new()
-if ($existing) { $list.AddRange($existing) }
+# REG_MULTI_SZ с ОДНИМ элементом PowerShell разворачивает в [string], а List[string].AddRange
+# свяжется с IEnumerable<char> и упадёт — приводим к [string[]] явно.
+if ($existing) { $list.AddRange([string[]]@($existing)) }
 $toAdd = [System.Collections.Generic.List[string]]::new()
-foreach ($p in $Paths) {
-    if (-not (Test-Path -LiteralPath $p)) { Write-Output "already gone: $p"; continue }
-    $toAdd.Add("\??\" + (Get-Item -LiteralPath $p -Force).FullName)
+function Add-Pending([string]$FullPath) {
+    $toAdd.Add("\??\" + $FullPath)
     $toAdd.Add('')   # пустая вторая часть = удаление
+}
+foreach ($p in $Paths) {
+    if (Test-ProtectedRoot $p) { Write-Output "BLOCKED (системный корень): $p"; continue }
+    $item = Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
+    if (-not $item) { Write-Output "already gone: $p"; continue }
+    if ($item.PSIsContainer) {
+        # MoveFileEx удаляет каталог ТОЛЬКО если он пуст — очередь непустой папки молча ничего не
+        # сделает при перезагрузке (реальный дефект: documented usage передавал непустые папки).
+        # Раскрываем в глубину: сначала все файлы, потом подкаталоги от самых глубоких к корню.
+        $files = @(Get-ChildItem -LiteralPath $item.FullName -Recurse -Force -File -ErrorAction SilentlyContinue)
+        $dirs  = @(Get-ChildItem -LiteralPath $item.FullName -Recurse -Force -Directory -ErrorAction SilentlyContinue |
+                   Sort-Object { $_.FullName.Length } -Descending)
+        foreach ($f in $files) { Add-Pending $f.FullName }
+        foreach ($d in $dirs)  { Add-Pending $d.FullName }
+        Add-Pending $item.FullName
+        Write-Output ("queued dir: {0} (файлов {1}, подкаталогов {2})" -f $item.FullName, $files.Count, $dirs.Count)
+    } else {
+        Add-Pending $item.FullName
+        Write-Output ("queued file: " + $item.FullName)
+    }
 }
 
 # Защита от переполнения: значение читается smss при загрузке, практически потолок ~32 КБ.

@@ -17,7 +17,8 @@
 #          PC_ELEV_ARGS=$'-Work\nD:\путь\n-Dism'   ;   ./run-elevated.ps1 -Script "..."
 #   (в PowerShell -Args работает как обычно: @(...) или 'a','b').
 # Exit: 0 успех (см. exit-код elevated), 1 целевой скрипт не найден, 2 parse-ошибка,
-#       3 VERIFY-FAIL — elevated-процесс не подтвердил права администратора (см. -ElevLog).
+#       3 VERIFY-FAIL — elevated-процесс не подтвердил права администратора (см. -ElevLog),
+#       4 UAC отменён/отклонён, 5 VERIFY-WARN — ожидаемый лог не создан (проверить нечем).
 param(
     [Parameter(Mandatory=$true)][string]$Script,
     [string[]]$Args = @(),
@@ -45,8 +46,24 @@ if ($errs -and $errs.Count) {
 
 Write-Output 'Сейчас появится окно UAC — подтверди (подожди завершения elevated-скрипта).'
 $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $Script + '"'))
-foreach ($arg in $Args) { $a += $arg }
-$p = Start-Process -FilePath powershell.exe -ArgumentList $a -Verb RunAs -PassThru -Wait
+# Квотим аргументы с пробелами/кавычками: Start-Process склеивает массив пробелами, а powershell.exe
+# затем пересплитует — без кавычек путь 'D:\my work\logs' развалился бы на два аргумента (обещание
+# PC_ELEV_ARGS «пути с пробелами — целиком в одной строке» иначе не выполняется).
+foreach ($arg in $Args) {
+    $s = [string]$arg
+    if ($s -match '["\s]') { $a += ('"' + ($s -replace '"','\"') + '"') } else { $a += $s }
+}
+$p = $null
+try {
+    $p = Start-Process -FilePath powershell.exe -ArgumentList $a -Verb RunAs -PassThru -Wait
+} catch {
+    # Отменённый/отклонённый UAC бросает Win32 ERROR_CANCELLED (1223) — не падаем, сообщаем честно.
+    if ($_.Exception.NativeErrorCode -eq 1223 -or $_.Exception.HResult -eq -2147023673) {
+        Write-Output 'UAC отменён — elevated-проход не выполнен.'
+        exit 4
+    }
+    throw
+}
 Write-Output ("UAC-exit: " + $p.ExitCode)
 
 # --- верификация фактического подъёма прав (не верим ни UAC-диалогу, ни exit-коду) ---
@@ -73,9 +90,11 @@ if ($ElevLog -and (Test-Path -LiteralPath $ElevLog)) {
         Write-Output ('VERIFY-WARN: не смог оценить права по логу (' + $ElevLog + '), доверяю exit-коду.')
     }
 } elseif ($ElevLog) {
-    Write-Output ('VERIFY-WARN: ожидаемый лог elevated-скрипта не найден (' + $ElevLog + ') — доверяю exit-коду.')
+    Write-Output ('VERIFY-WARN: ожидаемый лог elevated-скрипта не найден (' + $ElevLog + ') — проверять нечем.')
+    Write-Output '  Либо -Work неверен, либо elevated-скрипт упал до записи первой строки. Проход НЕ подтверждён.'
+    exit 5
 }
 
 if ($p.ExitCode -eq 0) { Write-Output 'OK: elevated-скрипт завершился без ошибок (смотри его лог).' }
 else { Write-Output ('Замечание: exit=' + $p.ExitCode + ' — вероятны ошибки внутри (смотри лог скрипта).') }
-exit 0
+exit $p.ExitCode

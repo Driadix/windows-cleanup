@@ -1,5 +1,5 @@
 ﻿# cleanup-common.ps1 — общая библиотека для phase-скриптов windows-cleanup
-# Подключается через  . "$env:USERPROFILE\AppData\Local\hermes\skills\...\scripts\cleanup-common.ps1"  (или путём из репо).
+# Подключается из phase-скриптов той же папки:  . (Join-Path $PSScriptRoot 'cleanup-common.ps1')
 # Правила:
 #   * Никаких функций с именами ключевых слов PS (Do/ForEach/...).
 #   * Никаких `return $null` внутри ForEach-Object-пайплайнов (emit $null ломает вызов).
@@ -10,7 +10,9 @@ $ErrorActionPreference = 'Continue'
 
 function Test-Elevated {
     # Возвращает True, если процесс под администратором (по привилегии, не по SID).
-    return ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole('Administrators')
+    # BuiltInRole-enum вместо строки 'Administrators' — локаленезависимо (на ru-RU/др. языках
+    # встроенная группа называется иначе, и поиск по имени дал бы ложный False).
+    return ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
 function Get-SizeBytes([string]$Path) {
@@ -60,11 +62,30 @@ function fmt-N {
     return ([double]$Value).ToString(('0.' + ('#' * $Decimals)), [System.Globalization.CultureInfo]::InvariantCulture)
 }
 
-function Get-VolumeBrief {
-    # Строки по томам с буквой:  "C: | label=X | free 54,20 ГБ"
-    Get-Volume | Where-Object DriveLetter | ForEach-Object {
-        '{0}: | {1} | свободно {2} ГБ' -f $_.DriveLetter, $(if ($_.FileSystemLabel) { $_.FileSystemLabel } else { '(нет метки)' }), [math]::Round($_.SizeRemaining / 1GB, 2)
-    }
+function Get-FixedVolumes {
+    # Только фиксированные тома с буквой (исключает Removable/Network/CD-ROM).
+    # ВАЖНО: .DriveType у Get-Volume на живых сборках отдаётся СТРОКОЙ ('Fixed'/'Removable'),
+    # а не enum — поэтому сравнение `-ne 2` молча не срабатывает (реальный кейс прогона 2026-10-03:
+    # съёмный том E: просочился в отчёт корзин). Сравниваем по строковому представлению enum-имени,
+    # что одинаково верно и когда DriveType — enum, и когда — строка.
+    Get-Volume | Where-Object { $_.DriveLetter -and ($_.DriveType.ToString() -eq 'Fixed') }
+}
+
+function Test-SharedRoot([string]$Path) {
+    # True, если путь — общий/корневой контейнер (Program Files, ProgramData, SystemRoot, корень тома,
+    # профиль, LOCALAPPDATA, APPDATA), а не каталог конкретного приложения. Многие MSI пишут
+    # InstallLocation = 'C:\Program Files' или 'C:\' — рекурсивный обход такой «локации» обходит ВЕСЬ
+    # диск. Отсекаем их до замера размера (см. unused-detect.ps1).
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $true }
+    $p = $Path.Replace('/','\').TrimEnd('\')
+    if ($p -match '^[A-Za-z]:$') { return $true }   # голый корень тома 'C:'
+    $shared = @(
+        $env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:ProgramData, $env:SystemRoot,
+        $env:USERPROFILE, $env:LOCALAPPDATA, $env:APPDATA, $env:SystemDrive
+    ) | Where-Object { $_ } | ForEach-Object { $_.Replace('/','\').TrimEnd('\').ToUpperInvariant() }
+    $pu = $p.ToUpperInvariant()
+    foreach ($s in $shared) { if ($pu -eq $s) { return $true } }
+    return $false
 }
 
 function New-WorkDir {
@@ -79,8 +100,10 @@ function New-WorkDir {
 function Get-ExePath([string]$CmdLine) {
     # Надёжно вычленяет исполняемый файл из командной строки (автозапуски/службы/задачи).
     # Понимает: "C:\...\app.exe" args... | C:\Program Files\X\app.exe --flag | app.exe.
-    # Службы WMI могут отдавать путь с удвоенными backslash'ами — схлопываем до старта разбора.
-    $t = $CmdLine.Trim().Replace('\\','\')
+    # Службы WMI отдают путь с удвоенными backslash'ами — схлопываем runs 2+ до одного, НО
+    # ведущий run оставляем двойным (UNC \\server\share\app.exe). Простое .Replace('\\','\')
+    # ломало UNC-автозапуски (\\srv -> \srv) и давало ложный BROKEN-статус.
+    $t = [regex]::Replace($CmdLine.Trim(), '\\{2,}', { param($m) if ($m.Index -eq 0) { '\\' } else { '\' } })
     if ($t -match '^"([^"]+)"') { return $Matches[1] }
     # НЕТ аргументов: вся строка (с пробелами в пути) — сам исполняемый
     if ($t -match '\.(exe|dll|com|bat|cmd|ps1|vbs)$') { return $t }
@@ -105,16 +128,6 @@ function Test-UrlBroken([string]$Path) {
     return (-not $m.Success) -or [string]::IsNullOrWhiteSpace($m.Groups[1].Value)
 }
 
-function Test-LnkAlive([string]$Path) {
-    # .lnk: живой, если цель существует; пустая цель / shell:/ms-settings:/::{CLSID} — легитимно.
-    $sh = New-Object -ComObject WScript.Shell
-    $target = ''
-    try { $target = $sh.CreateShortcut($Path).TargetPath } catch { }
-    if ([string]::IsNullOrWhiteSpace($target)) { return $true }          # shell-объекты
-    if ($target -like '::*' -or $target -match '^(shell|folder|appx?|digitalsigner|ms-settings|ms-appx):') { return $true }
-    return (Test-Path -LiteralPath $target)
-}
-
 function Test-ProtectedRoot([string]$Path) {
     # Defense-in-depth: возвращает $true, если $Path — сам защищённый системный корень
     # или лежит внутри него. Ворота (согласие пользователя) — первая линия; этот жёсткий
@@ -131,6 +144,18 @@ function Test-ProtectedRoot([string]$Path) {
         "$sr\SERVICEPROFILES"
     )
     $p = ([string]$Path).Replace('/','\').ToUpperInvariant().TrimEnd('\')
+    # Allow-list: легитимные кэши живут под \ServiceProfiles\ (защищённый корень), но являются
+    # законными целями elevated-прохода. Без исключения Test-ProtectedRoot молча блокировал их —
+    # цель возвращала 0 байт при статусе 'done' (реальный кейс прогона 2026-10-03: DeliveryOptimization).
+    # Перечисляем ТОЧНО, а не «всё ServiceProfiles» — профили LocalService/NetworkService сами по
+    # себе содержат системные данные, их трогать нельзя.
+    $allow = @(
+        "$sr\SERVICEPROFILES\NETWORKSERVICE\APPDATA\LOCAL\MICROSOFT\WINDOWS\DELIVERYOPTIMIZATION",
+        "$sr\SERVICEPROFILES\LOCALSERVICE\APPDATA\LOCAL\FONTCACHE"
+    )
+    foreach ($a in $allow) {
+        if ($p -eq $a -or $p.StartsWith($a + '\')) { return $false }
+    }
     foreach ($pr in $protected) {
         if ($p -eq $pr -or $p.StartsWith($pr + '\')) { return $true }
     }
@@ -150,24 +175,35 @@ function Remove-Target {
         $ok = -not (Test-Path -LiteralPath $Path)
     } catch { $ok = -not (Test-Path -LiteralPath $Path) }
     if ($ok) { return [pscustomobject]@{ Status='removed'; RemovedBytes=$before; RemainsBytes=0L } }
-    return [pscustomobject]@{ Status='LOCKED'; RemovedBytes=0L; RemainsBytes=(Get-SizeBytes -Path $Path) }
+    # LOCKED: Remove-Item мог УСПЕТЬ удалить часть содержимого до блокировки — не заявляем
+    # RemovedBytes=0 (иначе ledger теряет реально освобождённое). Считаем before − осталось.
+    $remains = Get-SizeBytes -Path $Path
+    $partialRemoved = [math]::Max(0L, $before - $remains)
+    return [pscustomobject]@{ Status='LOCKED'; RemovedBytes=$partialRemoved; RemainsBytes=$remains }
 }
 
 function Remove-Contents {
     # Удалить СОДЕРЖИМОЕ папки (саму папку не трогаем). Возвращает объект со статусами.
     param([Parameter(Mandatory=$true)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) { return [pscustomobject]@{ Status='already gone'; RemovedBytes=0L; LockedCount=0; RemainsBytes=0L } }
-    $before = Get-SizeBytes -Path $Path
-    $removed = 0L; $lockedCnt = 0
+    # $before здесь был мёртв: RemovedBytes копится из размеров удалённых элементов, RemainsBytes
+    # пересчитывается в конце — полный обход «до» ничего не давал (лишний проход по дереву цели).
+    $removed = 0L; $lockedCnt = 0; $deletedCnt = 0
     foreach ($item in (Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue)) {
         if (Test-ProtectedRoot $item.FullName) { $lockedCnt++; continue }  # системный корень внутри — не трогаем
         $sz = if ($item.PSIsContainer) { Get-SizeBytes -Path $item.FullName } else { [long]$item.Length }
         try {
             Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction Stop
-            $removed += $sz
+            $removed += $sz; $deletedCnt++
         } catch { $lockedCnt++ }
     }
-    return [pscustomobject]@{ Status='done'; RemovedBytes=$removed; LockedCount=$lockedCnt; RemainsBytes=(Get-SizeBytes -Path $Path) }
+    # Статус должен отражать РЕЗУЛЬТАТ, а не факт вызова (реальный кейс прогона 2026-10-03:
+    # Office C2R / EdgeUpdate Download под Program Files из user-сессии: removed=0, всё locked,
+    # а в ledger ушло 'done' — отчёт врал, что цель очищена).
+    $status = if ($removed -eq 0 -and $lockedCnt -gt 0) { 'LOCKED' }
+              elseif ($deletedCnt -eq 0) { 'already gone' }   # детей не было вовсе
+              else { 'done' }   # пустые папки-дети дают 0 байт, но считаются удалёнными
+    return [pscustomobject]@{ Status=$status; RemovedBytes=$removed; LockedCount=$lockedCnt; RemainsBytes=(Get-SizeBytes -Path $Path) }
 }
 
 function Init-Ledger {

@@ -36,7 +36,14 @@ $ErrorActionPreference = 'Continue'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $here 'cleanup-common.ps1')   # ConvertTo-Bytes и пр.
 $minDupLong = ConvertTo-Bytes -Size $MinDupBytes   # '50MB'/'1.5GB'/число -> байты (см. ConvertTo-Bytes)
-$suffix = if ($Tag) { '_' + ([string]$Tag).Trim().Trim('_') } else { '' }
+if ($minDupLong -le 0) {
+    # ConvertTo-Bytes молча вернул 0 на нераспознанной строке → порог «>0 байт» собрал бы ВСЕ файлы
+    # в dupeMap (OOM/тормоза без единого сообщения). Возвращаем безопасный дефолт.
+    Write-Warning ("-MinDupBytes '" + $MinDupBytes + "' не распознан — беру 50MB")
+    $minDupLong = 50MB
+}
+$safeTag = ([string]$Tag).Trim().Trim('_') -replace '[^\w.-]',''   # защита имени файла от '-Tag a/b'
+$suffix = if ($safeTag) { '_' + $safeTag } else { '' }
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 if (-not (Test-Path -LiteralPath $OutDir)) { New-Item -ItemType Directory -Path $OutDir -Force | Out-Null }
 $dirTop  = Join-Path $OutDir ('dirs_top' + $suffix + '.txt')
@@ -51,7 +58,8 @@ $rootLen = $rootWin.Length
 
 # --- исключаемые префиксы (case-insensitive) ---
 $excl = New-Object 'System.Collections.Generic.List[string]'
-if ($OutDir.StartsWith($rootWin, [StringComparison]::OrdinalIgnoreCase)) { $excl.Add(($OutDir.Replace('/','\').TrimEnd('\') + '\')) }
+$outNorm = $OutDir.Replace('/','\').TrimEnd('\')   # OutDir часто с прямыми слэшами (git-bash) — нормализуем ДО сравнения
+if (($outNorm + '\').StartsWith($rootWin, [StringComparison]::OrdinalIgnoreCase)) { $excl.Add($outNorm + '\') }
 $excl.Add(($rootWin + '$RECYCLE.BIN\'))
 $excl.Add(($rootWin + 'System Volume Information\'))
 foreach ($x in $ExcludeRoots) { $excl.Add(($x.Replace('/','\').TrimEnd('\') + '\')) }
@@ -71,8 +79,16 @@ $dupeMap  = @{}                                  # "length|name" -> List[string]
 # --- обход: единственный проход Get-ChildItem -Recurse (классика; .NET-вариант убран — см. шапку) ---
 $FileAttr = [IO.FileAttributes]::ReparsePoint
 if ($ProgressFile) {
+    $pfDir = Split-Path -Parent $ProgressFile
+    if ($pfDir -and -not (Test-Path -LiteralPath $pfDir)) { New-Item -ItemType Directory -Path $pfDir -Force | Out-Null }
     if (Test-Path -LiteralPath $ProgressFile) { Remove-Item -LiteralPath $ProgressFile -Force }
-    ("# scan progress`tstart " + (Get-Date -Format 'HH:mm:ss')) | Add-Content -Path $ProgressFile -Encoding UTF8
+    ("# scan progress`tstart " + (Get-Date -Format 'HH:mm:ss')) | Add-Content -LiteralPath $ProgressFile -Encoding UTF8
+}
+# Любая terminating-ошибка обхода → пишем FAILED в прогресс-файл, иначе поллинг агента зависнет
+# в вечном ожидании DONE (DONE теперь пишется только в самом конце, после всех файлов).
+trap {
+    if ($ProgressFile) { ("FAILED`t{0}" -f $_.Exception.Message) | Add-Content -LiteralPath $ProgressFile -Encoding UTF8 }
+    break
 }
 $nFiles = 0
 foreach ($file in (Get-ChildItem -LiteralPath $rootWin -Recurse -Force -File -ErrorAction SilentlyContinue)) {
@@ -101,7 +117,7 @@ foreach ($file in (Get-ChildItem -LiteralPath $rootWin -Recurse -Force -File -Er
         if ($dupeMap.ContainsKey($dk)) { $dupeMap[$dk].Add($file.FullName) } else { $dupeMap[$dk] = New-Object 'System.Collections.Generic.List[string]'; $dupeMap[$dk].Add($file.FullName) }
     }
 }
-if ($ProgressFile) { ("DONE`t{0}`t{1}" -f [math]::Round($sw.Elapsed.TotalSeconds,1), $nFiles) | Add-Content -Path $ProgressFile -Encoding UTF8 }
+# (DONE перенесён в конец скрипта — после записи dirs_top/files_top/dupes и мета-кэша; см. ниже)
 
 # --- карта папок: добавить пустые дочерние, чтобы они не пропадали (0 ГБ) ---
 foreach ($d in (Get-ChildItem -LiteralPath $rootWin -Directory -Force -ErrorAction SilentlyContinue)) {
@@ -135,8 +151,8 @@ $sysMarkersUpper = @(
     '\MICROSOFT\EDGECORE\',
     '\MICROSOFT\EDGEWEBVIEW\'
 )
-$userLines = New-Object 'System.Collections.Generic.List[string]'
-$sysLines  = New-Object 'System.Collections.Generic.List[string]'
+$userRows = New-Object 'System.Collections.Generic.List[object]'
+$sysRows  = New-Object 'System.Collections.Generic.List[object]'
 foreach ($kv in $dupeMap.GetEnumerator()) {
     if ($kv.Value.Count -gt 1) {
         $len = [int64]([string]$kv.Key -split '\|')[0]
@@ -147,13 +163,15 @@ foreach ($kv in $dupeMap.GetEnumerator()) {
             if ($sys) { break }
         }
         foreach ($f in $kv.Value) {
-            $line = "{0}`t{1}" -f $len, $f
-            if ($sys) { $sysLines.Add($line) } else { $userLines.Add($line) }
+            $row = [pscustomobject]@{ Len = $len; Line = ("{0}`t{1}" -f $len, $f) }
+            if ($sys) { $sysRows.Add($row) } else { $userRows.Add($row) }
         }
     }
 }
-$userLines = @($userLines | Sort-Object { [int64](($_ -split "`t")[0]) } -Descending)
-$sysLines  = @($sysLines  | Sort-Object { [int64](($_ -split "`t")[0]) } -Descending)
+# Сортировка по числовому свойству Len, а не scriptblock-сплитом каждой строки (см. Pitfall SKILL.md:
+# Sort-Object со scriptblock на десятках тысяч строк — заметный CPU-стопор).
+$userLines = @($userRows | Sort-Object Len -Descending | ForEach-Object { $_.Line })
+$sysLines  = @($sysRows  | Sort-Object Len -Descending | ForEach-Object { $_.Line })
 if ($userLines.Count) { $userLines | Set-Content -Path $dupes -Encoding UTF8 }
 else { '(пусто — совпадений нет)' | Set-Content -Path $dupes -Encoding UTF8 }
 if ($sysLines.Count) {
@@ -169,16 +187,22 @@ $sw.Stop()
 
 # --- мета-кэш результата (для агента: не пересканировать при повторном показе отчёта) ---
 $meta = Join-Path $OutDir ('scan_meta' + $suffix + '.txt')
-$metaJson = @{
+$metaJson = [ordered]@{
     root          = $rootWin
     tag           = $Tag
-    started       = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    started       = (Get-Date).AddSeconds(-$sw.Elapsed.TotalSeconds).ToString('yyyy-MM-dd HH:mm:ss')
+    finished      = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
     duration_s    = [math]::Round($sw.Elapsed.TotalSeconds,1)
     min_dup_bytes = $minDupLong
     top_files     = $Top
     files         = $nFiles
+    host          = $env:COMPUTERNAME
+    complete      = $true
 }
-$metaJson | ConvertTo-Json -Compress | Set-Content -Path $meta -Encoding UTF8
+$metaJson | ConvertTo-Json -Compress | Set-Content -LiteralPath $meta -Encoding UTF8
+# DONE — ПОСЛЕДНИМ, когда все выходные файлы и мета уже на диске (иначе поллинг агента по DONE
+# прочитал бы отсутствующие/устаревшие dirs_top/dupes того же тега — гонка).
+if ($ProgressFile) { ("DONE`t{0}`t{1}" -f [math]::Round($sw.Elapsed.TotalSeconds,1), $nFiles) | Add-Content -LiteralPath $ProgressFile -Encoding UTF8 }
 
 Write-Output ("OK: dirs_top=$dirTop files_top=$fileTop dupes=$dupes в {0:N1} с" -f $sw.Elapsed.TotalSeconds)
 Write-Output ("META: " + $meta)

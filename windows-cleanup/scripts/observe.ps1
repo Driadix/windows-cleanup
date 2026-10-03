@@ -11,8 +11,10 @@ param(
     [string]$Level = 'info',
     [string]$Phase = '-'
 )
-if ($env:PC_CLEANUP_DIAG -eq '0') { exit 0 }   # диагностика выключена — no-op
-if (-not $Work -or -not $Msg) { exit 0 }
+# return, НЕ exit: голый `exit` в теле убивал вызывающего при dot-source (`. observe.ps1`) —
+# phase0.ps1 приходилось запускать его дочерним процессом (Start-Process) как workaround.
+if ($env:PC_CLEANUP_DIAG -eq '0') { return }   # диагностика выключена — no-op
+if (-not $Work -or -not $Msg) { return }
 if (-not (Test-Path -LiteralPath $Work)) { New-Item -ItemType Directory -Path $Work -Force | Out-Null }
 $out = Join-Path $Work 'observations.md'
 $lvl = $Level.ToUpperInvariant()

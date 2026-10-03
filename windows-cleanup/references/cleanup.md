@@ -9,25 +9,32 @@
 | Точка | Путь/команда | Уровень |
 |---|---|---|
 | TEMP пользователя | `$env:TEMP` (может быть перенаправлен!) | user |
-| System Temp | `C:\Windows\Temp` | elevated |
+| System Temp | `$env:SystemRoot\Temp` | elevated |
+| System Temp (Win11 24H2+) | `$env:SystemRoot\SystemTemp` — только при `Test-Path` (на Win10 отсутствует) | elevated |
 | npm | `npm cache clean --force` | user |
 | bun | `bun pm cache rm` | user |
-| pip / uv / go / NuGet | `pip cache purge` · `uv cache clean` · `go clean -cache` · NuGet HTTP-cache (`%LOCALAPPDATA%\NuGet\v3-cache`) | user |
-| Puppeteer | `~\\.cache\puppeteer` | user |
-| PlatformIO | `~\\.platformio\dist`, `~\\.platformio\.cache` | user |
-| Браузеры | `User Data\Default\Cache`, `GPUCache`, `Code Cache`, `Service Worker`, `ShaderCache` (Brave/Yandex/Edge) — профиль не трогать | user |
-| CrashDumps / D3DSCache / DXCache | `%LOCALAPPDATA%\CrashDumps`, `D3DSCache`, `NVIDIA\DXCache`, `Steam\htmlcache` | user |
+| pip / uv / go / NuGet | `pip cache purge` · `uv cache clean` · `go clean -cache` (`$env:LOCALAPPDATA\go-build`) · NuGet HTTP-cache (`$env:LOCALAPPDATA\NuGet\v3-cache`) | user |
+| Puppeteer | `~\.cache\puppeteer` | user |
+| PlatformIO | `~\.platformio\dist`, `~\.platformio\.cache` | user |
+| Браузеры | `User Data\{Default,Profile *}\{Cache,Code Cache,GPUCache,ShaderCache,Service Worker}` — Chrome/Edge/Brave/Yandex/Opera/Opera GX/Vivaldi; Firefox: `Profiles\*\cache2` + `startupCache`. Профиль (закладки/пароли) не трогать | user |
+| GPU-шейдерные кэши | `$env:LOCALAPPDATA\NVIDIA\DXCache`, `...\NVIDIA\GLCache`, `...\AMD\DxCache`, `...\AMD\GLCache`, `$env:LOCALAPPDATA\D3DSCache` — пересоздаются сами | user |
+| CrashDumps / WER (user) | `$env:LOCALAPPDATA\CrashDumps`, `$env:LOCALAPPDATA\Microsoft\Windows\WER\{ReportQueue,ReportArchive,Temp}` | user |
+| Steam | `$env:LOCALAPPDATA\Steam\htmlcache`, `...\Steam\shadercache` | user |
+| Discord / VS Code | `$env:APPDATA\discord\Cache` + `Code Cache`; `$env:APPDATA\Code\{Cache,CachedData,CachedExtensionVSIXs,logs}` | user |
+| INetCache / thumbcache | `$env:LOCALAPPDATA\Microsoft\Windows\INetCache`; `...\Explorer\thumbcache_*.db` + `iconcache_*.db` (нужен закрытый Explorer) | user |
 | Squirrel-старые | папки `app-x.y.z` и `*-updater` (оставить актуальную версию!) | user |
-| Кэши приложений | Discord/Figma/GitHubDesktop `.nupkg`, Steam htmlcache, Razer, vscode-cpptools `ipch`, thumbcache | user |
-| System Update | `C:\Windows\SoftwareDistribution\Download` + `DeliveryOptimization` (после `Stop-Service wuauserv,DoSvc`) | elevated |
-| Остатки драйверов | `C:\Windows\Dbz*`, `C:\AMD\RyzenMasterExtraction` (takeown при необходимости) | elevated |
+| System Update | `$env:SystemRoot\SoftwareDistribution\Download` + `\DataStore` (БД/история обновлений — сбрасывает историю, данных не теряет; отдельная строка в отчёте) + `$env:SystemRoot\ServiceProfiles\NetworkService\AppData\Local\Microsoft\Windows\DeliveryOptimization` (после `Stop-Service wuauserv,DoSvc,BITS`; по завершении прохода — вернуть службы!) | elevated |
+| Дампы/логи системы | `$env:SystemRoot\MEMORY.DMP`, `$env:SystemRoot\Minidump\*.dmp`, `$env:SystemRoot\LiveKernelReports`, `$env:SystemRoot\Logs\CBS`, `$env:ProgramData\Microsoft\Windows\WER` | elevated |
+| Кэш шрифтов | `$env:SystemRoot\ServiceProfiles\LocalService\AppData\Local\FontCache` (после `Stop-Service FontCache`) | elevated |
+| Остатки обновлений ОС | `$env:SystemDrive\$WINDOWS.~BT`, `\$GetCurrent`, `\$WinREAgent`, `\$SysReset`, `\Windows.old` (**Windows.old — отдельное согласие: убирает откат на прежнюю версию ОС**, флаг `-WindowsOld` у `elevated-cleanup.ps1`) | elevated |
+| Остатки драйверов | `$env:SystemRoot\Dbz*`, `$env:SystemDrive\AMD\RyzenMasterExtraction` (takeown при необходимости) | elevated |
 | WinSxS | `dism /Online /Cleanup-Image /StartComponentCleanup` (только это, не руками; `/ResetBase` — см. final-options) | elevated |
 
-`thumbcache_*.db` — пересоздаётся сам, но Explorer должен быть закрыт. `Packages` (UWP-data), `Installer` (MSI-кэш), `WinSxS`, `pagefile.sys` — **не руками**.
+`thumbcache_*.db` — пересоздаётся сам, но Explorer должен быть закрыт. `Packages` (UWP-data целиком), `Installer` (MSI-кэш целиком), `WinSxS`, `pagefile.sys`, `ProgramData\Package Cache` — **не руками** (Package Cache ломает ремонт/удаление приложений; из него допустимо только показывать размер как информацию). `%LOCALAPPDATA%\Packages\*\TempState` — per-app temp UWP, безопасен точечно. Win11: кэши Copilot/Recall/Windows Backup под `Packages\Microsoft.Copilot_*` — только при `Test-Path`.
 
 **Внимательные точки (вне таблицы, риск):**
-- `C:\Program Files\Microsoft Office\Updates\Download` — кэш обновлений Office C2R (~0,9 ГБ); удаление = повторная загрузка обновлений, данных не теряет. Как отдельную строку в отчёт (🟡).
-- `C:\Windows\Installer\Razer Central` — установочный кэш Razer (~0,3 ГБ); осторожно, пересоздаётся при переустановке.
+- `$env:ProgramFiles\Microsoft Office\Updates\Download` — кэш обновлений Office C2R (~0,9 ГБ); удаление = повторная загрузка обновлений, данных не теряет. Как отдельную строку в отчёт (🟡). Рядом: `$env:LOCALAPPDATA\Microsoft\Office\16.0\OfficeFileCache` (сотни МБ).
+- `$env:SystemRoot\Installer\<вендор>` (напр. Razer Central) — установочный кэш (~0,3 ГБ); осторожно, нужен для ремонта, пересоздаётся при переустановке.
 
 ## Таблица удаления по типам софта (Фаза 5)
 
@@ -51,7 +58,7 @@
 ## Чек-лист остатков ПОСЛЕ удаления
 
 Процессы → службы → задачи → Run-ключи → ярлыки → папки (PF/PF(x86)/AppData/ProgramData/свои каталоги) → реестр (HKLM+WOW6432+HKCU Uninstall + ключи приложения).
-**Правило:** папку не удалять, пока не сверен реестр и не подтверждено, что она не делит каталог с соседями (например `D:\Soft`). После удаления программы возможны битые ярлыки в Старт-меню — отдельно прогнать `scripts/shortcuts.ps1` (дешёвый ре-скан).
+**Правило:** папку не удалять, пока не сверен реестр и не подтверждено, что она не делит каталог с соседями (например общий каталог `D:\Soft` — `residue-check.ps1` сам помечает его «ОБЩИЙ КАТАЛОГ» и не считает остатком). После удаления программы возможны битые ярлыки в Старт-меню — отдельно прогнать `scripts/shortcuts.ps1` (дешёвый ре-скан).
 
 ## LOCKED-процедура
 

@@ -25,8 +25,9 @@ Get-Disk | Get-PhysicalDisk | Select DeviceId,FriendlyName,BusType,@{n='SizeGB';
 ## Карта папок и топ файлов
 
 ```powershell
-# Топ-50 папок по размеру для заданного корня (долго — запускать в фоне)
-$root='D:\'
+# Топ-50 папок по размеру для заданного корня (долго — запускать в фоне).
+# Корень НЕ хардкодим буквой: берём из ворот Фазы 1 или параметра. Пример для тома D::
+$root = 'D:\'   # <- подставь том, выбранный в Фазе 1; для системного тома — $env:SystemDrive + '\'
 Get-ChildItem -LiteralPath $root -Directory -Force | ForEach-Object {
   $s = (Get-ChildItem -LiteralPath $_.FullName -Recurse -Force -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
   [pscustomobject]@{ Path=$_.FullName; GB=[math]::Round($s/1GB,2) }
@@ -36,7 +37,7 @@ Get-ChildItem -LiteralPath $root -Directory -Force | ForEach-Object {
 Get-ChildItem -LiteralPath $root -Recurse -Force -File -ErrorAction SilentlyContinue | Sort-Object Length -Descending | Select-Object -First 50 Length,FullName | Out-File -FilePath "$work\files_top.txt" -Encoding UTF8
 ```
 
-Обязательные корни для карты: целевые диски, `C:\ProgramData`, `$env:LOCALAPPDATA`, `$env:APPDATA`, корень профиля (со скрытыми).
+Обязательные корни для карты: целевые диски, `$env:ProgramData`, `$env:LOCALAPPDATA`, `$env:APPDATA`, корень профиля (со скрытыми). Пути — только из env, не хардкодом `C:\...`.
 
 ## Установленные программы (реестр — главный источник)
 
@@ -50,24 +51,27 @@ Get-ItemProperty $paths -ErrorAction SilentlyContinue |
 ```
 
 - HKCU обязателен (per-user Squirrel), WOW6432Node обязателен (32-бит).
-- Вывод — **`installed.csv`** (колонки Name/Ver/Hive/Loc/LocExists/Uninst/Code/Date/SizeMB) — делает `scripts/inventory-quick.ps1` (вместе с установщиками, корзинами, кэшами).
-- **«Мёртвая запись» = кандидат, а не факт**: `InstallLocation`/`UninstallString` → несуществующий путь. Осторожно: легитимные MSI (VC++ 2012/2013/v14, .NET Runtime) часто держат `InstallLocation` = `C:\ProgramData\Package Cache\{guid}`, который отсутствует при вычищенном кэше установщика — это НЕ сирота. Второй критерий сироты: папка отсутствует И нет живого компонента/антиинсталлера по `UninstallString` И приложения нет в задачах/службах. Решение всегда за пользователем.
-- Win11 — дополнительно `winget list`; UWP — `Get-AppxPackage`.
-- **Детекция неиспользуемых** (Фаза 10) дополнительно смотрит UserAssist/Prefetch/MuiCache — см. `final-options.md`.
+- Вывод — **`installed.csv`** (колонки Name/Ver/Hive/Loc/LocExists/LocKind/Uninst/Code/Date/SizeMB) — делает `scripts/inventory-quick.ps1` (вместе с установщиками, корзинами, кэшами). `LocKind`: `ok`/`missing`/`packagecache`/`none` — нужен Фазе 6, чтобы не считать кэш установщика сиротой.
+- **«Мёртвая запись» = кандидат, а не факт**: `InstallLocation`/`UninstallString` → несуществующий путь. Осторожно: легитимные MSI (VC++ 2012/2013/v14, .NET Runtime) часто держат `InstallLocation` = `$env:ProgramData\Package Cache\{guid}`, который отсутствует при вычищенном кэше установщика — это НЕ сирота. Второй критерий сироты: папка отсутствует И нет живого компонента/антиинсталлера по `UninstallString` И приложения нет в задачах/службах. Решение всегда за пользователем. `inventory-quick.ps1` помечает такие `LocKind='packagecache'`, чтобы Фаза 6 не сочла их сиротами.
+- `winget list` (UWP — `Get-AppxPackage`): winget есть и на Win10 19045+ (замер прогона 2026-10-03), не только Win11 — проверяй наличие через `Get-Command winget`, а не по номеру сборки.
+- **Детекция неиспользуемых** (артефакт Фазы 2, блок 🔵 в Фазе 3) дополнительно смотрит UserAssist\Count/Prefetch/MuiCache — см. `final-options.md` и `scripts/unused-detect.ps1`.
 
 ## Установщики (Desktop / Downloads / Documents)
 
-```powershell
 @("$env:USERPROFILE\Desktop","$env:USERPROFILE\Downloads","$env:USERPROFILE\Documents") |
-  ForEach-Object { Get-ChildItem -LiteralPath $_ -File -Include *.exe,*.msi,*.zip,*.iso,*.rar -ErrorAction SilentlyContinue } |
+  ForEach-Object { Get-ChildItem -LiteralPath $_ -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.Extension -in '.exe','.msi','.zip','.iso','.rar','.7z' } } |
   Select @{n='GB';e={[math]::Round($_.Length/1GB,2)}},LastWriteTime,FullName | Sort GB -Descending
+# ВНИМАНИЕ: -Include/-Exclude с -LiteralPath молча не фильтруют (см. Pitfalls в SKILL.md) —
+# только Where-Object по .Extension. Desktop/Documents при OneDrive KFM могут быть перенесены:
+# реальные пути даёт inventory-quick.ps1 через shell-folders + User Shell Folders.
 ```
 
 Правило: никогда авто-удалять; только по списку с размером и датой; дубликат инсталлятора можно сократить до одной копии.
 
 **Внимательные точки вне пользовательских папок** (риск, не авто, уточнять у пользователя):
-- `C:\Program Files\Microsoft Office\Updates\Download` — кэш обновлений Office C2R (реально ~0,9 ГБ); удаление заставит Office скачать обновления заново, данных не теряет;
-- `C:\Windows\Installer\Razer Central` — кэш установщиков Razer (~0,3 ГБ); осторожно (файлы нужны для ремонта Razer, но пересоздаются при переустановке).
+- `$env:ProgramFiles\Microsoft Office\Updates\Download` — кэш обновлений Office C2R (~0,9 ГБ); удаление заставит Office скачать обновления заново, данных не теряет;
+- `$env:SystemRoot\Installer\<вендор>` (напр. Razer Central) — кэш установщиков (~0,3 ГБ); осторожно (файлы нужны для ремонта, но пересоздаются при переустановке).
 
 ## Дубликаты (только кандидаты!)
 

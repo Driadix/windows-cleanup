@@ -17,7 +17,9 @@ $lines = @()
 $lines += '=== ФАЗА 0. КОНТЕКСТ ==='
 $lines += ('Время: ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
 $os = Get-CimInstance Win32_OperatingSystem
-$lines += ('ОС: ' + $os.Caption + ' | Build ' + $os.BuildNumber)
+$build = [int]$os.BuildNumber
+$isWin11 = $build -ge 22000
+$lines += ('ОС: ' + $os.Caption + ' | Build ' + $os.BuildNumber + ' | ' + $(if ($isWin11) { 'Windows 11' } else { 'Windows 10' }))
 $lines += ('PS: ' + $PSVersionTable.PSVersion.ToString())
 $lines += ('Пользователь: ' + $(whoami) + ' | Профиль: ' + $env:USERPROFILE)
 $lines += ('TEMP: ' + $env:TEMP)
@@ -30,7 +32,8 @@ if (-not (Test-Elevated) -and -not $isInteractive) {
     $lines += 'UAC-RISK: неинтерактивная сессия + не-админ — Start-Process -Verb RunAs может НЕ повысить права'
     $lines += '  (процесс останется Medium integrity). Если elevated-проход не сработает: перезапусти агента от'
     $lines += '  имени администратора или выполни elevated-команду вручную из админ-консоли (см. run-elevated.ps1).'
-    # observe.ps1 использует exit в теле — dot-source его нельзя (exit убьёт и нас), запускаем дочерним процессом
+    # observe.ps1 запускаем дочерним процессом (dot-source тоже безопасен — в нём return, не exit,
+    # но отдельный процесс дешевле: не тянет контекст в нашу сессию)
     try {
         $obs = Join-Path $here 'observe.ps1'
         if (Test-Path -LiteralPath $obs) {

@@ -46,6 +46,55 @@ def check_ps_syntax(script: pathlib.Path) -> tuple[bool, str]:
         return True, "OK"
     return False, out or f"exit={r.returncode}"
 
+# ---------------------------------------------------------------------------
+# Portability: no machine-bound absolute paths. LEGAL (never flagged): anything
+# derived at runtime from env/$PSScriptRoot/Get-Volume/Join-Path/Split-Path/[IO.Path].
+# ILLEGAL in CODE: a literal drive root followed by a machine-specific folder
+# (C:\Windows\..., C:\Program Files\...), a quoted literal drive path, or an
+# agent-specific skills dir (hermes/.claude/.codex). Hits inside comments/docstrings
+# are WARNINGS only (usage examples); executable-code hits are FAILURES.
+# ---------------------------------------------------------------------------
+_DRIVE_ROOT = re.compile(r"(?<![A-Za-z0-9_$])[A-Za-z]:[\\/]")
+_MACHINE_SEG = re.compile(
+    r"(?i)(?:Users[\\/]"
+    r"|Windows[\\/](?:Temp|System32|SysWOW64|WinSxS|assembly|SoftwareDistribution|ServiceProfiles|Prefetch|Installer|Logs)"
+    r"|Program\ Files(?: \(x86\))?[\\/]"
+    r"|ProgramData[\\/]"
+    r"|AppData[\\/](?:Local|Roaming)[\\/](?:Microsoft|hermes)"
+    r"|\$WINDOWS\.~BT|\$GetCurrent|\$WinREAgent)"
+)
+_AGENT_SKILL_DIR = re.compile(r"(?i)(?:hermes[\\/]skills|\.claude[\\/]skills|\.codex[\\/]skills|opencode[\\/]skills)")
+
+
+def _is_ps_comment(line: str) -> bool:
+    """A .ps1 line is a comment if its first non-space char is '#'."""
+    return line.lstrip().startswith("#")
+
+
+
+def find_hardcoded_paths(path: pathlib.Path):
+    """Return [(line_no, stripped_line, is_comment)] of machine-bound path literals."""
+    hits = []
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return hits
+    is_ps = path.suffix.lower() == ".ps1"
+    for n, line in enumerate(text.splitlines(), 1):
+        flagged = False
+        for m in _DRIVE_ROOT.finditer(line):
+            tail = line[m.end():]
+            quoted = line[m.start() - 1:m.start()] in "\"'" if m.start() > 0 else False
+            if _MACHINE_SEG.match(tail) or (quoted and _MACHINE_SEG.search(tail)):
+                flagged = True
+                break
+        if not flagged and _AGENT_SKILL_DIR.search(line):
+            flagged = True
+        if flagged:
+            is_comment = _is_ps_comment(line) if is_ps else True
+            hits.append((n, line.strip(), is_comment))
+    return hits
+
 
 def main() -> int:
     arg = sys.argv[1] if len(sys.argv) > 1 else ""
@@ -94,21 +143,34 @@ def main() -> int:
                     if plats is None or "windows" not in plats:
                         errors.append("platforms must include 'windows'")
 
+    repo_root = skill_dir.parent
+    scripts_dir = skill_dir / "scripts"
+    scripts = sorted(scripts_dir.glob("*.ps1")) if scripts_dir.exists() else []
+
     # References / scripts mentioned in the body must exist on disk
     if body:
         for ref in sorted(set(re.findall(r"references/[\w.\-]+\.md", body))):
             p = skill_dir / ref
             if not p.exists():
                 errors.append(f"body references missing file: {ref}")
-        for s in sorted(set(re.findall(r"scripts/[\w.\-]+\.ps1", body))):
-            p = skill_dir / s
-            if not p.exists():
-                errors.append(f"body references missing script: {s}")
-        print("  referenced files/scripts: all present" if not errors or all("missing file" not in e and "missing script" not in e for e in errors) else "")
+        documented = set(re.findall(r"scripts/([\w.\-]+\.ps1)", body))
+        for s in sorted(documented):
+            if not (scripts_dir / s).exists():
+                errors.append(f"body references missing script: scripts/{s}")
+        # Обратный дрейф: скрипт лежит в scripts/, но SKILL.md о нём не знает —
+        # агент никогда его не запустит (реальная проблема: молча мёртвый код).
+        on_disk = {p.name for p in scripts}
+        for name in sorted(on_disk - documented):
+            errors.append(f"script not documented in SKILL.md body: scripts/{name}")
+        print("  referenced files/scripts: all present")
 
-    # BOM check on every shipped script (PS 5.1 needs UTF-8 BOM for Cyrillic source files)
-    scripts = sorted((skill_dir / "scripts").glob("*.ps1")) if (skill_dir / "scripts").exists() else []
-    for s in scripts:
+    # BOM check on every shipped script — И на tools/*.ps1 (кейс прогона 2026-10-03:
+    # smoke_test.ps1 был без BOM при кириллических литералах; PS 5.1 на ru-RU читает как cp1251).
+    bom_targets = list(scripts)
+    tools_dir = repo_root / "tools"
+    if tools_dir.exists():
+        bom_targets += sorted(tools_dir.glob("*.ps1"))
+    for s in bom_targets:
         head = s.read_bytes()[:3]
         if head != b"\xef\xbb\xbf":
             errors.append(f"{s.name}: no UTF-8 BOM (EF BB BF) — PS 5.1 will misread it as ANSI (cp1251 on ru-RU) and Cyrillic breaks parsing")
@@ -121,6 +183,28 @@ def main() -> int:
         print(f"  ps-syntax {s.name}: {note}")
         if not ok:
             errors.append(f"PS syntax error in {s.name}: {note}")
+
+    # Portability: machine-bound absolute paths. В коде — ОШИБКА, в комментариях/доках — warning.
+    portability_files = list(scripts)
+    for d, pat in ((skill_dir / "references", "*.md"), (repo_root / "tools", "*.ps1")):
+        if d.exists():
+            portability_files += sorted(d.glob(pat))
+    if sk.exists():
+        portability_files.append(sk)
+    warn_count = 0
+    for f in portability_files:
+        try:
+            rel = f.relative_to(repo_root)
+        except ValueError:
+            rel = f.name
+        for n, line, is_comment in find_hardcoded_paths(f):
+            where = f"{rel}:{n}"
+            if is_comment:
+                print(f"  WARN {where}: machine-bound path in comment/doc -> {line[:110]}")
+                warn_count += 1
+            else:
+                errors.append(f"{where}: hardcoded machine path in code -> {line[:110]}")
+    print(f"  portability: {warn_count} warning(s) in comments/docs, executable code must be clean")
 
     if errors:
         print("\nFAILURES:")

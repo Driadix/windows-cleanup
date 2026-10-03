@@ -1,6 +1,10 @@
 # Локальные логи и временное
 pc-cleanup-logs/
 **/pc-cleanup-logs/
+# Рабочая папка прогона по умолчанию (New-WorkDir в cleanup-common.ps1 создаёт <Документы>\PC-Cleanup\<дата>);
+# если прогон идёт внутри репо — не засоряем git status.
+PC-Cleanup/
+**/PC-Cleanup/
 archive/
 *.log
 *.tmp

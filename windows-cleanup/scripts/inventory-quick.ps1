@@ -10,6 +10,9 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $here 'cleanup-common.ps1')
 $ErrorActionPreference = 'Continue'
 if (-not (Test-Path -LiteralPath $Work)) { New-Item -ItemType Directory -Path $Work -Force | Out-Null }
+# Буквы выбранных в Фазе 1 дисков (нормализовано: без ':', верхний регистр) — единый источник
+# для фильтра корзин (секция 3) и пометки кэшей «вне выбранных дисков» (секция 4).
+$selDisks = @($Disks | ForEach-Object { ($_.TrimEnd(':')).ToUpperInvariant() })
 
 # ---------- 1. Установленные программы -> CSV ----------
 $rows = @()
@@ -56,12 +59,16 @@ $rows | Sort-Object Name | Export-Csv -Path (Join-Path $Work 'installed.csv') -N
 
 # ---------- 2. Установщики в пользовательских папках ----------
 $ins = @()
-foreach ($d in @(($env:USERPROFILE + '\Desktop'), ($env:USERPROFILE + '\Downloads'), ($env:USERPROFILE + '\Documents'))) {
-    if (Test-Path -LiteralPath $d) {
-        Get-ChildItem -LiteralPath $d -File -ErrorAction SilentlyContinue |
-            Where-Object { $_.Extension -in '.exe','.msi','.zip','.iso','.rar','.7z' } |
-            ForEach-Object { $ins += [pscustomobject]@{ GB=[math]::Round($_.Length/1GB,2); Last=$_.LastWriteTime.ToString('yyyy-MM-dd'); Path=$_.FullName } }
-    }
+# KFM (OneDrive Known Folder Move): Desktop/Documents бывают перенесены в %USERPROFILE%\OneDrive\...,
+# тогда литерал $env:USERPROFILE\Desktop пуст и установщики не находятся. Берём реальные пути через
+# shell-folders; Downloads не имеет shell-id — читаем из User Shell Folders (учитывает перенаправление).
+$dlReg = (Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders' -Name '{374DE290-123F-4565-9164-39C4925E467B}' -ErrorAction SilentlyContinue).'{374DE290-123F-4565-9164-39C4925E467B}'
+$downloads = if ($dlReg) { [Environment]::ExpandEnvironmentVariables($dlReg) } else { (Join-Path $env:USERPROFILE 'Downloads') }
+foreach ($d in @([Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('MyDocuments'), $downloads)) {
+    if (-not $d -or -not (Test-Path -LiteralPath $d)) { continue }
+    Get-ChildItem -LiteralPath $d -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Extension -in '.exe','.msi','.zip','.iso','.rar','.7z' } |
+        ForEach-Object { $ins += [pscustomobject]@{ GB=[math]::Round($_.Length/1GB,2); Last=$_.LastWriteTime.ToString('yyyy-MM-dd'); Path=$_.FullName } }
 }
 if ($ins.Count) {
     $ins | Sort-Object GB -Descending | ForEach-Object { "{0}`t{1}`t{2}" -f (fmt-N $_.GB 2), $_.Last, $_.Path } |
@@ -73,27 +80,35 @@ if ($ins.Count) {
 }
 
 # ---------- 3. Корзины по дискам (только $R*) ----------
-# DriveType у Get-Volume — enum; явно исключаем съёмные(2)/сетевые(4)/CD(5)
+# DriveType у Get-Volume на живых сборках — СТРОКА ('Fixed'/'Removable'), не enum: фильтр `-ne 2`
+# молча не срабатывал (реальный кейс прогона 2026-10-03: съёмный E: просочился в отчёт). Используем
+# Get-FixedVolumes + учитываем -Disks (корзины чистим только по выбранным в Фазе 1 томам).
 $rbLines = @()
-foreach ($v in (Get-Volume | Where-Object { $_.DriveLetter -and $_.DriveType -ne 2 -and $_.DriveType -ne 4 -and $_.DriveType -ne 5 })) {
-    $root = '{0}:\$Recycle.Bin' -f $v.DriveLetter
+foreach ($v in (Get-FixedVolumes)) {
+    $dl = [string]$v.DriveLetter   # DriveLetter — [char]; без приведения .ToUpperInvariant() падает
+    if ($selDisks -and ($selDisks -notcontains $dl.ToUpperInvariant())) { continue }
+    $root = '{0}:\$Recycle.Bin' -f $dl
     if (Test-Path -LiteralPath $root) {
         $sum = (Get-ChildItem -LiteralPath $root -Recurse -Force -File -ErrorAction SilentlyContinue |
                 Where-Object { $_.Name -like '$R*' } | Measure-Object Length -Sum).Sum
         if ($null -eq $sum) { $sum = 0 }
-        $rbLines += ('{0}: {1} ГБ' -f $v.DriveLetter, [math]::Round([long]$sum/1GB,2))
-    } else { $rbLines += ('{0}: нет корзины/нет доступа' -f $v.DriveLetter) }
+        $rbLines += ('{0}: {1} ГБ' -f $dl, [math]::Round([long]$sum/1GB,2))
+    } else { $rbLines += ('{0}: нет корзины/нет доступа' -f $dl) }
 }
-if (-not $rbLines) { $rbLines = '(пусто — томов NTFS с буквами нет)' }
+if (-not $rbLines) { $rbLines = '(пусто — выбранных фиксированных томов нет)' }
 $rbLines | Set-Content -Path (Join-Path $Work 'recyclebin.txt') -Encoding UTF8
 
 # ---------- 4. Кэши (браузерные по профилям + пакетные) ----------
 $cTargets = @()
 foreach ($br in @(
     @{ N='Brave'; UserData="$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data" },
+    @{ N='Chrome'; UserData="$env:LOCALAPPDATA\Google\Chrome\User Data" },
+    @{ N='Chrome Beta'; UserData="$env:LOCALAPPDATA\Google\Chrome Beta\User Data" },
     @{ N='Yandex'; UserData="$env:LOCALAPPDATA\Yandex\YandexBrowser\User Data" },
     @{ N='Edge'; UserData="$env:LOCALAPPDATA\Microsoft\Edge\User Data" },
-    @{ N='Opera'; UserData="$env:LOCALAPPDATA\Programs\Opera\User Data" }
+    @{ N='Opera'; UserData="$env:LOCALAPPDATA\Programs\Opera\User Data" },
+    @{ N='Opera GX'; UserData="$env:LOCALAPPDATA\Programs\Opera GX\User Data" },
+    @{ N='Vivaldi'; UserData="$env:LOCALAPPDATA\Vivaldi\User Data" }
 )) {
     if (-not (Test-Path -LiteralPath $br.UserData)) { continue }
     $profiles = @(Get-ChildItem -LiteralPath $br.UserData -Directory -Force -ErrorAction SilentlyContinue |
@@ -104,6 +119,15 @@ foreach ($br in @(
         }
     }
 }
+# Firefox: профиль в %LOCALAPPDATA%\Mozilla\Firefox\Profiles\<hash>\, кэш — cache2 + startupCache
+$ffRoot = "$env:LOCALAPPDATA\Mozilla\Firefox\Profiles"
+if (Test-Path -LiteralPath $ffRoot) {
+    foreach ($pf in (Get-ChildItem -LiteralPath $ffRoot -Directory -Force -ErrorAction SilentlyContinue)) {
+        foreach ($sub in @('cache2','startupCache')) {
+            $cTargets += [pscustomobject]@{ N = ("Firefox {0}\{1}" -f $pf.Name, $sub); Path = (Join-Path $pf.FullName $sub) }
+        }
+    }
+}
 $cTargets += @(
     [pscustomobject]@{ N='%TEMP%'; Path=$env:TEMP },
     [pscustomobject]@{ N='npm cache (local)'; Path="$env:LOCALAPPDATA\npm-cache" },
@@ -111,15 +135,40 @@ $cTargets += @(
     [pscustomobject]@{ N='uv cache'; Path="$env:LOCALAPPDATA\uv\cache" },
     [pscustomobject]@{ N='pip cache'; Path="$env:LOCALAPPDATA\pip\Cache" },
     [pscustomobject]@{ N='NuGet v3-cache'; Path="$env:LOCALAPPDATA\NuGet\v3-cache" },
+    [pscustomobject]@{ N='Go build cache'; Path="$env:LOCALAPPDATA\go-build" },
     [pscustomobject]@{ N='electron Cache'; Path="$env:LOCALAPPDATA\electron\Cache" },
-    [pscustomobject]@{ N='VS Code CachedExtensionVSIXs'; Path="$env:APPDATA\Code\CachedExtensionVSIXs" }
+    [pscustomobject]@{ N='VS Code CachedExtensionVSIXs'; Path="$env:APPDATA\Code\CachedExtensionVSIXs" },
+    [pscustomobject]@{ N='VS Code Cache'; Path="$env:APPDATA\Code\Cache" },
+    [pscustomobject]@{ N='VS Code CachedData'; Path="$env:APPDATA\Code\CachedData" },
+    [pscustomobject]@{ N='Steam htmlcache'; Path="$env:LOCALAPPDATA\Steam\htmlcache" },
+    [pscustomobject]@{ N='Steam shadercache'; Path="$env:LOCALAPPDATA\Steam\shadercache" },
+    [pscustomobject]@{ N='Discord Cache'; Path="$env:APPDATA\discord\Cache" },
+    [pscustomobject]@{ N='Discord Code Cache'; Path="$env:APPDATA\discord\Code Cache" },
+    [pscustomobject]@{ N='CrashDumps'; Path="$env:LOCALAPPDATA\CrashDumps" },
+    [pscustomobject]@{ N='D3DSCache'; Path="$env:LOCALAPPDATA\D3DSCache" },
+    [pscustomobject]@{ N='NVIDIA DXCache'; Path="$env:LOCALAPPDATA\NVIDIA\DXCache" },
+    [pscustomobject]@{ N='NVIDIA GLCache'; Path="$env:LOCALAPPDATA\NVIDIA\GLCache" },
+    [pscustomobject]@{ N='AMD DxCache'; Path="$env:LOCALAPPDATA\AMD\DxCache" },
+    [pscustomobject]@{ N='INetCache'; Path="$env:LOCALAPPDATA\Microsoft\Windows\INetCache" },
+    [pscustomobject]@{ N='WER (user)'; Path="$env:LOCALAPPDATA\Microsoft\Windows\WER" },
+    [pscustomobject]@{ N='Explorer thumbcache'; Path="$env:LOCALAPPDATA\Microsoft\Windows\Explorer" },
+    [pscustomobject]@{ N='bun install cache'; Path="$env:USERPROFILE\.bun\install\cache" }
 )
-$selDisks = @($Disks | ForEach-Object { ($_.TrimEnd(':')).ToUpperInvariant() })
+# Squirrel/updater-остатки: папки *-updater в LOCALAPPDATA (orca-updater, *-aidesktop-updater,
+# yandexmusic-updater и т.п.). cleanup.md их упоминает («Squirrel-старые: папки app-x.y.z и *-updater»),
+# но quick-проход их не мерил — на живой машине это 642 МБ (прогон 2026-10-03).
+foreach ($u in (Get-ChildItem -LiteralPath $env:LOCALAPPDATA -Directory -Force -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -like '*-updater' })) {
+    $cTargets += [pscustomobject]@{ N = ('updater: ' + $u.Name); Path = $u.FullName }
+}
 $cLines = foreach ($t in $cTargets) {
+    # Сначала Test-Path (Get-SizeBytes сам делает Test-Path внутри — не меряем отсутствующее),
+    # и защищаем GetPathRoot от пустого пути ($env:TEMP может быть пуст — иначе ArgumentException).
+    if (-not $t.Path -or -not (Test-Path -LiteralPath $t.Path)) { "{0}`t(нет)`t{1}" -f $t.N, $t.Path; continue }
     $sz = Get-SizeBytes -Path $t.Path
-    if (-not (Test-Path -LiteralPath $t.Path)) { "{0}`t(нет)`t{1}" -f '-', $t.Path; continue }
-    $vol = ([IO.Path]::GetPathRoot($t.Path)).TrimEnd('\')
-    $onSel = (-not $selDisks) -or ($selDisks -contains (($vol.TrimEnd(':')).ToUpperInvariant()))
+    $root = [IO.Path]::GetPathRoot($t.Path)
+    $vol = if ($root) { $root.TrimEnd('\') } else { '' }
+    $onSel = (-not $selDisks) -or (-not $vol) -or ($selDisks -contains (($vol.TrimEnd(':')).ToUpperInvariant()))
     $flag = if ($onSel) { '' } else { '  [том ' + $vol + ' — вне выбранных дисков]' }
     "{0}`t{1} ГБ`t{2}{3}" -f $t.N, (fmt-N ($sz/1GB) 3), $t.Path, $flag
 }

@@ -16,15 +16,15 @@
 
 | Источник | Команда/путь |
 |---|---|
-| Run/RunOnce | HKCU + HKLM + WOW6432Node `...\CurrentVersion\Run*` |
-| Startup-папки | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup` + `$env:ProgramData\...` |
-| Задачи | `Get-ScheduledTask` + фильтр `TaskPath -notlike '\Microsoft\Windows\*'` + разворачивать `Actions` + `Get-ScheduledTaskInfo` |
+| Run/RunOnce | HKCU + HKLM + WOW6432Node `...\CurrentVersion\Run` **и `RunOnce`** (все 6 веток) |
+| Startup-папки | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup` + `$env:ProgramData\...StartUp` |
+| Задачи | `Get-ScheduledTask` + фильтр `TaskPath -notlike '\Microsoft\Windows\*'` + разворачивать `Actions` |
 | Службы Auto | `Get-CimInstance Win32_Service \| Where-Object StartMode -eq 'Auto'` |
-| Winlogon | `Shell`, `Userinit` |
-| StartupApproved | `...\Explorer\StartupApproved\Run` (состояние вкл/выкл) |
+| Winlogon | `Shell`, `Userinit`, `AppSetup`, `VmApplet` (`Shell`/`Userinit` могут содержать несколько путей через запятую — проверять каждый) |
+| StartupApproved | `...\Explorer\StartupApproved\{Run,Run32,StartupFolder}` (HKCU+HKLM): 12 байт, первый `0x02`=ВЫКЛ / `0x03`=ВКЛ, байты 4–11 = FILETIME изменения (**нулевой FILETIME печатать датой нельзя** — выйдет 1601-01-01). Сирота = состояние есть, а значения Run/файла Startup уже нет |
 
-**Правило:** показать пользователю **весь список** (не только битые) с предложением на каждую запись: удалить программу целиком / отключить автозапуск (`sc.exe config <svc> start= disabled` · `Disable-ScheduledTask` · снять Run-значение) / оставить. Отчёт строит `scripts/autostart.ps1`. Статусы: голые имена exe (резолвятся через %PATH%) — не битые; PathName служб может содержать двойные `\\` (схлопывать); пути с пробелами без аргументов — проверять целиком; shell-/`::{}`-таргеты — валидны.
+**Правило:** показать пользователю **весь список** (не только битые) с предложением на каждую запись: удалить программу целиком / отключить автозапуск (`sc.exe config <svc> start= disabled` · `Disable-ScheduledTask` · снять Run-значение) / оставить. Отчёт строит `scripts/autostart.ps1`. Статусы: голые имена exe (резолвятся через %PATH%) — не битые; PathName служб может содержать двойные `\\` — схлопывать runs 2+ до одного, **но ведущий run оставлять двойным** (UNC `\\srv\share\app.exe`; простое `.Replace('\\','\')` превращало его в `\srv\...` и давало ложный BROKEN); пути с пробелами без аргументов — проверять целиком; shell-/`::{}`-таргеты — валидны.
 
 ## Битые ярлыки (Фаза 8)
 
-Скрипт `scripts/shortcuts.ps1` проходит 4 места: Desktop user+Public, Start Menu user+ProgramData; `.lnk` и `.url`. Битые = `TargetPath` не существует. Живые не трогать. Итог — сосчитать битые/целые в отчёт.
+Скрипт `scripts/shortcuts.ps1` проходит места через **shell-folders** (`[Environment]::GetFolderPath('Desktop'/'CommonDesktopDirectory'/'Programs'/'CommonPrograms')`) + Quick Launch — склейка `$env:USERPROFILE\Desktop` пропускала рабочий стол при OneDrive KFM (Desktop/Documents перенесены в `%USERPROFILE%\OneDrive\...`). `.lnk` и `.url`. Битые = `TargetPath` не существует (цель предварительно раскрывается через `ExpandEnvironmentVariables` — `%windir%\...` иначе давал ложный «битый»). Живые не трогать. Итог — сосчитать битые/целые в отчёт. С `-Remove`: после `Remove-Item` обязательный `Test-Path` — при `SilentlyContinue` catch не срабатывает и заблокированный ярлык записывался бы как `removed`.

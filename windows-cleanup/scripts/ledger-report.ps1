@@ -10,7 +10,7 @@ $led = Join-Path $Work $Ledger
 $out = Join-Path $Work 'ledger_report.txt'
 if (-not (Test-Path -LiteralPath $led)) { Write-Error ('нет ledger: ' + $led); exit 1 }
 
-$rows = @(Import-Csv -LiteralPath $led)
+$rows = @(Import-Csv -LiteralPath $led -Encoding UTF8)   # кириллица без BOM иначе читается как ANSI
 $lines = @()
 $lines += '=== СВОД ПО LEDGER.CSV ==='
 $base = @($rows | Where-Object { $_.phase -eq 'baseline' })
@@ -24,7 +24,11 @@ $removed = @($rows | Where-Object { $_.phase -ne 'baseline' })
 $byPhase = $removed | Group-Object phase | ForEach-Object {
     [pscustomobject]@{ Phase=$_.Name; MB=($_.Group | Measure-Object -Property removed_mb -Sum).Sum; N=$_.Count }
 } | Sort-Object Phase
-foreach ($p in $byPhase) { $lines += ('  {0}: {1:N1} МБ ({2:N2} ГБ)  ({3} записей)' -f $p.Phase, $p.MB, ($p.MB/1024), $p.N) }
+foreach ($p in $byPhase) {
+    # Measure-Object по пустому набору даёт $null в Sum → {0:N1} напечатал бы пустую ячейку (кейс 0.2.2)
+    $mb = if ($null -eq $p.MB) { 0 } else { [double]$p.MB }
+    $lines += ('  {0}: {1:N1} МБ ({2:N2} ГБ)  ({3} записей)' -f $p.Phase, $mb, ($mb/1024), $p.N)
+}
 $totalMB = ($removed | Measure-Object -Property removed_mb -Sum).Sum
 if ($null -eq $totalMB) { $totalMB = 0 }   # syndrome: Measure-Object пустого набора возвращает $null, и {0:N1} печатает пустоту (0.2.2)
 $lines += ('  ИТОГО освобождено (по строкам ledger): {0:N1} МБ ({1:N2} ГБ)' -f $totalMB, ($totalMB/1024))
@@ -36,7 +40,9 @@ foreach ($v in (Get-Volume | Where-Object DriveLetter)) {
     $nowMB = [double]$v.SizeRemaining / 1MB
     if ($bl) {
         $deltaGB = ($nowMB - [double]$bl.size_before_mb) / 1024
-        $lines += ('  {0}: было {1:N2} ГБ -> стало {2:N2} ГБ свободно  (разница свободного: {3:N2} ГБ)' -f $v.DriveLetter, ([double]$bl.size_before_mb/1024), ($nowMB/1024), [math]::Abs($deltaGB))
+        # Знак ОБЯЗАТЕЛЬНО сохраняем: [math]::Abs печатал «разница свободного: +N ГБ» и при ПОТЕРЕ
+        # места (новые файлы за время прогона) — итог Фазы 10 выглядел как освобождение, которого не было.
+        $lines += ('  {0}: было {1:N2} ГБ -> стало {2:N2} ГБ свободно  (изм. свободного: {3:+0.00;-0.00;0.00} ГБ)' -f $v.DriveLetter, ([double]$bl.size_before_mb/1024), ($nowMB/1024), $deltaGB)
     } else { $lines += ('  {0}: baseline нет (том не был в фазе 0)' -f $v.DriveLetter) }
 }
 $lines | Set-Content -Path $out -Encoding UTF8
